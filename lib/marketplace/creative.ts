@@ -51,6 +51,7 @@ export function validateCreative(
     ? validateCreativeUrl(payload.destinationUrl, "destination", policy)
     : undefined;
   const attachmentUrls = payload.creative.attachments.map((attachment) => {
+    validateAdvertiserDisplayText(attachment.title);
     if (!attachment.sizeBytes || !attachment.sha256) {
       throw new CreativePolicyError(
         "UNSUPPORTED_ATTACHMENT",
@@ -59,9 +60,8 @@ export function validateCreative(
     }
     return validateCreativeUrl(attachment.url, "creative", policy).toString();
   });
-  if (/<\s*(?:script|iframe|object|embed|form|meta|base)\b/i.test(payload.creative.body)) {
-    throw new CreativePolicyError("UNSAFE_CREATIVE", "Executable or embedding markup is not allowed in ad copy");
-  }
+  validateAdvertiserDisplayText(payload.title);
+  validateAdvertiserDisplayText(payload.creative.body);
   if (payload.creative.implementationPrompt) {
     validateImplementationPrompt(payload.creative.implementationPrompt, policy);
   }
@@ -73,6 +73,15 @@ export function validateCreative(
     attachmentUrls: Object.freeze(attachmentUrls),
     contentSecurityPolicy: buildCreativeContentSecurityPolicy({ destinationOrigins }),
   });
+}
+
+function validateAdvertiserDisplayText(value: string): void {
+  if (/<\s*(?:script|iframe|object|embed|form|meta|base)\b/i.test(value)) {
+    throw new CreativePolicyError("UNSAFE_CREATIVE", "Executable or embedding markup is not allowed in ad copy");
+  }
+  if (FORBIDDEN_PROMPT_PATTERNS.some((pattern) => pattern.test(value))) {
+    throw new CreativePolicyError("UNSAFE_CREATIVE", "Advertiser display text requests privileged or executable behavior");
+  }
 }
 
 export function validateImplementationPrompt(
