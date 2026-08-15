@@ -33,6 +33,8 @@ test("app binds the private auction worker in every environment", async () => {
   assert.equal(config.vars.AD_DADDY_ENV, "test");
   assert.equal(config.vars.AD_DADDY_MEMO_SALT, undefined, "memo salt must be supplied as a Wrangler secret, never plaintext vars");
   assert.equal(config.vars.AD_DADDY_PAYMENT_EVENT_SECRET, undefined, "payment event authentication must be supplied as a Wrangler secret");
+  assert.equal(config.vars.AD_DADDY_SPONSORSHIP_SIGNING_PRIVATE_KEY, undefined, "sponsorship signing key must be supplied as a Wrangler secret");
+  assert.equal(config.vars.AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID, undefined, "sponsorship key identity must be supplied out of band");
 
   for (const environment of ["staging", "production"]) {
     const env = config.env[environment];
@@ -43,10 +45,14 @@ test("app binds the private auction worker in every environment", async () => {
     assert.equal(env.vars.AD_DADDY_ENV, environment);
     assert.equal(env.vars.AD_DADDY_MEMO_SALT, undefined, "memo salt must not be committed to deployment config");
     assert.equal(env.vars.AD_DADDY_PAYMENT_EVENT_SECRET, undefined, "payment event secret must not be committed to deployment config");
+    assert.equal(env.vars.AD_DADDY_SPONSORSHIP_SIGNING_PRIVATE_KEY, undefined, "sponsorship signing key must not be committed to deployment config");
+    assert.equal(env.vars.AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID, undefined, "sponsorship key identity must not be committed to deployment config");
   }
   const workerBindings = await readFile("worker-configuration.d.ts", "utf8");
   assert.match(workerBindings, /AD_DADDY_MEMO_SALT: string/);
   assert.match(workerBindings, /AD_DADDY_PAYMENT_EVENT_SECRET: string/);
+  assert.match(workerBindings, /AD_DADDY_SPONSORSHIP_SIGNING_PRIVATE_KEY: string/);
+  assert.match(workerBindings, /AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID: string/);
   assert.match(workerBindings, /AD_DADDY_ENV: "test" \| "staging" \| "production"/);
 });
 

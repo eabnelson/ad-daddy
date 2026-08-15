@@ -7,5 +7,9 @@ declare namespace Cloudflare {
     AD_DADDY_MEMO_SALT: string;
     /** Private indexer HMAC secret. Never configure this value under `vars`. */
     AD_DADDY_PAYMENT_EVENT_SECRET: string;
+    /** Ed25519 PKCS#8 PEM used for device-bound grants and inert placements. Wrangler secret only. */
+    AD_DADDY_SPONSORSHIP_SIGNING_PRIVATE_KEY: string;
+    /** Identifier for the corresponding published sponsorship verification key. */
+    AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID: string;
   }
 }
