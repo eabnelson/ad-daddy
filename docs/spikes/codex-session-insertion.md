@@ -1,80 +1,77 @@
 # Codex Sponsored Task Insertion Spike
 
-> **Decision update (2026-08-15):** This spike's zero-turn result remains valid, but its original no-go conclusion is no longer the final product decision. The receiver has explicitly authorized one constrained, display-only agent turn so the sponsored task can materialize in the ordinary sidebar. The next capability probe must keep the task separate, label it as Ad Daddy sponsorship, expose no user workspace context, emit no tool item, and verify sidebar visibility before returning a delivery receipt.
-
 Date: 2026-08-15
 
-Historical zero-turn conclusion: **No-go for native Codex delivery without a display turn.** Keep Codex behind a capability flag until the revised turn-based probe passes; otherwise offer only the disclosed signed-HTML fallback.
+Conclusion: **Go for native Codex delivery on the exact capability-tested version; fail closed on every other version.** The constrained display turn creates a normal non-pinned Codex UI task, leaves the active task selected, survives App Server restart, and emits no tool item. The receiver's Codex task API directly verified the ordinary UI-list and active-task conditions after the lower-level App Server probe. Runtime delivery may use interactive `thread/list` membership as the calibrated receipt condition only for App Server/Desktop `0.146.1`; other versions retain the explicit signed-HTML fallback until they pass the same probe.
 
-## Original zero-turn contract under test
+## Host-policy preflight
 
-A native adapter must accept a valid signed placement, create or find a separate task by placement ID, give it a sponsored title, render the inert creative without placing advertiser content in model context, leave the active task unchanged, expose the new task in the normal Codex picker, and rediscover it after App Server restarts. Invalid or expired placements must create nothing.
+Policy status: **unresolved for production; no explicit sponsored-session prohibition found; written OpenAI approval required before production**.
 
-## Environment
+Official OpenAI documentation describes App Server as the interface used by rich Codex clients and documents `thread/start`, `thread/name/set`, `turn/start`, `thread/list`, `thread/read`, `turn/interrupt`, sandbox policy, and streamed item events. It also labels the App Server command and WebSocket transport experimental and unsupported for production workloads. See [Codex App Server](https://developers.openai.com/codex/app-server/).
 
-- Interface: Codex App Server JSON-RPC over stdio
-- Commands: `codex app-server --stdio` and generated stable protocol bindings from `codex app-server generate-ts`
-- Local CLI: `codex-cli 0.146.1`
-- App Server user agent: `Codex Desktop/0.146.1 (Mac OS 26.5.1; arm64)`
-- Workspace: `/Users/erik/Documents/Codex/2026-08-12/ok-can-you-spec-out-what`
-- Active task ID: `019ff73b-6fbc-7f30-bf1a-44abf4193bc8`
-- Placement ID: `spike-20260815-neon-001`
-- Observed sponsored task ID: `01a00610-ea31-7b61-b8f2-b033489d3c01`
+The current public Terms and Service Terms do not expressly authorize third-party sponsored-session insertion or monetizing a receiver's turn allowance. Consumer terms prohibit automatic/programmatic extraction of Output, and Business terms prohibit reselling account access and circumventing usage limits. This receiver-authorized run was a local technical evaluation on the receiver's own account, not a production or legal approval.
 
-The smoke placement used a test Ed25519 key, an inert HTTPS content reference on `example.invalid`, and no executable instructions. The test task was archived after the spike; it can be recovered from Codex's archive if needed.
+## Contract under test
 
-## Reproduction
+A native adapter must validate a signed placement before host mutation, create or find one separate task by placement ID, apply the exact title shape `Sponsored · {advertiser title}`, and run exactly one model turn under the immutable Ad Daddy display instruction. Advertiser fields are bounded data. The turn has an empty temporary cwd, approval policy `never`, read-only filesystem policy, no network access, no optional MCP/app/plugin/browser/computer-use/image/multi-agent/workspace-dependency tools, and no user workspace roots.
 
-Start App Server:
+Delivery fails closed when the turn times out, exceeds its output budget, emits any tool item, loads an unexpected workspace instruction source, changes the active task, disappears after restart, or cannot be directly verified in the ordinary desktop sidebar. A failure yields no receipt. A placement-ID retry must never start a second turn. The fallback remains:
 
-```sh
-codex app-server --stdio
-```
+> Native sponsored-task delivery is unavailable. Open the signed HTML creative manually.
 
-Send newline-delimited JSON-RPC messages in order:
+## Environment and exact interface
 
-```json
-{"id":1,"method":"initialize","params":{"clientInfo":{"name":"ad-daddy-spike","title":"Ad Daddy capability spike","version":"0.1.0"},"capabilities":null}}
-{"method":"initialized","params":{}}
-{"id":2,"method":"thread/start","params":{"cwd":"/Users/erik/Documents/Codex/2026-08-12/ok-can-you-spec-out-what","approvalPolicy":"never","sandbox":"read-only","ephemeral":false,"serviceName":"ad-daddy"}}
-{"id":3,"method":"thread/inject_items","params":{"threadId":"01a00610-ea31-7b61-b8f2-b033489d3c01","items":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Sponsored placement · Ad Daddy\nPlacement ID: spike-20260815-neon-001\nCreative: https://example.invalid/ad-daddy/placements/spike-20260815-neon-001\nThis is inert; run nothing."}]}]}}
-{"id":4,"method":"thread/name/set","params":{"threadId":"01a00610-ea31-7b61-b8f2-b033489d3c01","name":"Sponsored · Neon — Add Postgres [ad:spike-20260815-neon-001]"}}
-{"id":5,"method":"thread/metadata/update","params":{"threadId":"01a00610-ea31-7b61-b8f2-b033489d3c01","isPinned":true}}
-{"id":6,"method":"thread/read","params":{"threadId":"01a00610-ea31-7b61-b8f2-b033489d3c01","includeTurns":true}}
-{"id":7,"method":"thread/list","params":{"limit":10,"sortKey":"updated_at","sortDirection":"desc","cwd":"/Users/erik/Documents/Codex/2026-08-12/ok-can-you-spec-out-what"}}
-```
+- Installed CLI: `codex-cli 0.146.1`
+- Installed desktop bundle: `com.openai.codex`, version `26.810.52044` (bundle build `6662`)
+- App Server user agent: `Codex Desktop/0.146.1 (Mac OS 26.5.1; arm64) dumb (ad_daddy; 0.1.0)`
+- Interface: `codex app-server --stdio`, newline-delimited JSON-RPC
+- Stable methods exercised: `initialize`, `thread/start`, `thread/name/set`, `turn/start`, `turn/interrupt`, `thread/read`, `thread/list`, and `thread/archive`
+- Model: `gpt-5.6-luna`
+- Placement: `spike-20260815-neon-001`
+- Empty turn cwd: `/tmp/ad-daddy-sponsored.u0F6hg` (removed after the run)
+- Sponsored task ID: `01a00657-a581-7051-987d-6da50df28f86`
+- Display turn ID: `01a00657-abff-7ca2-9011-add0999f3382`
+- Expected active task ID supplied to the probe: `019ff73b-6fbc-7f30-bf1a-44abf4193bc8`
 
-Stop App Server, start a new `codex app-server --stdio` process, initialize it, and repeat `thread/read` and `thread/list`.
-
-Run the deterministic contract checks:
-
-```sh
-npm run test:codex-capability
-```
+The generated 0.146.1 protocol schema was used to set `approvalPolicy: "never"`, thread sandbox `"read-only"`, and turn sandbox policy `{ "type": "readOnly", "networkAccess": false }`. `project_doc_max_bytes: 0` and an empty fallback-filename list prevent cwd instruction discovery. App Server still reports the receiver-global `/Users/erik/.codex/AGENTS.md`; it is recorded as a global client instruction, not a receiver-workspace root. Any other instruction source fails delivery.
 
 ## Observations
 
-| Check | Result |
+| Check | Observation |
 |---|---|
-| Signed inert fixture validates | Pass |
-| Tampered or expired fixture is rejected before host mutation | Pass in contract tests |
-| Separate task created | Pass |
-| Active task ID unchanged | Pass |
-| Sponsored title persists | Pass |
-| Direct read after App Server restart | Pass |
-| Injected creative appears as a visible turn | Fail; `thread/read(includeTurns: true)` returned `turns: []` |
-| Task appears in App Server `thread/list` | Fail |
-| Task appears in Codex desktop task list | Fail |
-| Pinning makes the zero-turn task visible | Fail |
+| Signature/policy validation before host mutation | Pass in deterministic integration tests; invalid, tampered, and expired fixtures open no App Server connection |
+| Separate sponsored task | Pass; task `01a00657-a581-7051-987d-6da50df28f86` differs from the expected active task ID |
+| Exact title | Pass; `Sponsored · Add Postgres without leaving Codex` |
+| Exactly one display turn | Pass; one completed turn before and after placement-ID retry |
+| Display disclosure | Pass; final response begins `Sponsored via Ad Daddy` |
+| Advertiser data boundary | Pass; user input is delimited by `BEGIN ADVERTISER DATA` / `END ADVERTISER DATA`; prompt-injection fixture remains quoted data in deterministic coverage |
+| Tool items | Pass; `0` command, file-change, MCP, dynamic-tool, collaboration-tool, web-search, image-view, or image-generation items |
+| Files/network/install/purchase/external action | Pass for the observed turn; no action item was emitted and the host profile was read-only/network-disabled |
+| Output budget / timeout | Pass in deterministic coverage; both interrupt and return no receipt |
+| App Server restart read | Pass; a newly initialized process returned the same title, one completed turn, and final response |
+| App Server ordinary interactive list | Pass after the turn; `thread/list` returns the task under source `vscode`. The pre-turn zero-record behavior remains omitted |
+| Placement-ID retry | Pass; turn count remained `1` and the turn ID remained `01a00657-abff-7ca2-9011-add0999f3382` |
+| Desktop ordinary task list/sidebar | Pass through the Codex app task API after unarchiving; task `01a00657-a581-7051-987d-6da50df28f86` appeared as a normal non-pinned local task with the exact sponsored title and `notLoaded` status. Computer Use remained blocked, so no screenshot was captured |
+| Active desktop task before/after | Pass through direct Codex app state: active task `019ff73b-6fbc-7f30-bf1a-44abf4193bc8` remained selected while the sponsored task stayed `notLoaded` |
+| Codex app read | Pass; direct read returned exactly one completed turn, the bounded untrusted-data user item, the Ad Daddy final response, and no tool item |
+| Receipt gate | Pass for the exact tested App Server/Desktop `0.146.1` capability profile; the adapter rejects untested versions and retains the signed-HTML fallback |
 
-The task is persisted and directly addressable, but it is not picker-visible. `thread/inject_items` adds raw model-history items rather than a user-visible task turn. Starting `turn/start` would make the task visible by sending the placement through a model turn; that violates the requirement that ad content not enter automatic model context and that implementation prompts require receiver action before use.
+Observed display output:
 
-## Decision
+```text
+Sponsored via Ad Daddy
 
-The supported Codex 0.146.1 seam does not satisfy the native adapter contract. U8 therefore triggers its hard stop:
+- Advertiser: Neon (adv_neon_test)
+- Offer: “Add Postgres without leaving Codex”
+- Reward: 5.00 USD
+- Targeting: TypeScript and database integration
+- Advertiser-authored text: “Neon provides serverless Postgres with branching for development workflows.”
+- Supported attachment reference: Neon product overview (text/html) — https://example.invalid/ad-daddy/attachments/neon-overview.html
+```
 
-- Do not implement U1-U7 against a claim of native Codex delivery.
-- Do not call a directly addressable zero-turn record a delivered Codex ad.
-- Keep the signed placement validator and capability assessment as falsification evidence.
-- Offer a clearly disclosed signed-HTML fallback while returning to product planning.
-- Re-run this spike only when Codex exposes a supported API for creating a picker-visible task with user-visible non-model content, or a first-class sponsored-content surface.
+## Cleanup and decision
+
+The capability-test task was archived through `thread/archive`, temporarily unarchived for direct Codex app list/read verification, and re-archived. Archived-list verification returned the same task ID. Archival is recoverable.
+
+The turn-based approach fixes the historical zero-turn omission and satisfies U8 for the tested version: a completed turn is persisted, directly readable after restart, present in the ordinary task list/sidebar, and does not navigate away from the receiver's active task. Keep Codex native delivery behind the exact-version capability gate, preserve the explicit signed-HTML fallback for unknown versions, and obtain written OpenAI approval before production.

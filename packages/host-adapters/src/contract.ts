@@ -6,6 +6,20 @@ export type PlacementValidationCode =
   | "NOT_YET_VALID"
   | "EXPIRED";
 
+export const PLACEMENT_ATTACHMENT_MEDIA_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "text/html",
+  "application/pdf",
+] as const;
+
+export type PlacementAttachmentMediaType =
+  (typeof PLACEMENT_ATTACHMENT_MEDIA_TYPES)[number];
+
+const PLACEMENT_ATTACHMENT_MEDIA_TYPE_SET = new Set<string>(
+  PLACEMENT_ATTACHMENT_MEDIA_TYPES,
+);
+
 export interface PlacementPayload {
   protocolVersion: 1;
   placementId: string;
@@ -21,6 +35,14 @@ export interface PlacementPayload {
     currency: "USD";
   };
   signalsUsed: string[];
+  creative: {
+    body: string;
+    attachments: Array<{
+      title: string;
+      url: string;
+      mediaType: PlacementAttachmentMediaType;
+    }>;
+  };
   issuedAt: string;
   expiresAt: string;
 }
@@ -106,6 +128,7 @@ export function validateSignedPlacement(
 function validatePayloadShape(placement: SignedPlacement): void {
   const payload = placement?.payload;
   const contentReference = safeUrl(payload?.contentReference);
+  const attachments = payload?.creative?.attachments;
   const issuedAt = Date.parse(payload?.issuedAt);
   const expiresAt = Date.parse(payload?.expiresAt);
 
@@ -126,6 +149,17 @@ function validatePayloadShape(placement: SignedPlacement): void {
     Array.isArray(payload.signalsUsed) &&
     payload.signalsUsed.length <= 20 &&
     payload.signalsUsed.every((signal) => bounded(signal, 1, 80)) &&
+    bounded(payload.creative?.body, 1, 4_000) &&
+    Array.isArray(attachments) &&
+    attachments.length <= 5 &&
+    attachments.every((attachment) => {
+      const url = safeUrl(attachment?.url);
+      return (
+        bounded(attachment?.title, 1, 120) &&
+        url?.protocol === "https:" &&
+        PLACEMENT_ATTACHMENT_MEDIA_TYPE_SET.has(attachment?.mediaType)
+      );
+    }) &&
     Number.isFinite(issuedAt) &&
     Number.isFinite(expiresAt) &&
     issuedAt < expiresAt;
