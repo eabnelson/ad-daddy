@@ -29,13 +29,25 @@ test("app binds the private auction worker in every environment", async () => {
   assert.equal(config.services[0].binding, "AUCTION_SERVICE");
   assert.equal(config.services[0].service, "ad-daddy-auction");
   assert.equal(config.d1_databases[0].binding, "DB");
+  assert.equal(config.d1_databases[0].migrations_dir, "drizzle");
+  assert.equal(config.vars.AD_DADDY_ENV, "test");
+  assert.equal(config.vars.AD_DADDY_MEMO_SALT, undefined, "memo salt must be supplied as a Wrangler secret, never plaintext vars");
+  assert.equal(config.vars.AD_DADDY_PAYMENT_EVENT_SECRET, undefined, "payment event authentication must be supplied as a Wrangler secret");
 
   for (const environment of ["staging", "production"]) {
     const env = config.env[environment];
     assert.equal(env.services[0].binding, "AUCTION_SERVICE");
     assert.match(env.services[0].service, new RegExp(`${environment}$`));
     assert.equal(env.d1_databases[0].binding, "DB");
+    assert.equal(env.d1_databases[0].migrations_dir, "drizzle");
+    assert.equal(env.vars.AD_DADDY_ENV, environment);
+    assert.equal(env.vars.AD_DADDY_MEMO_SALT, undefined, "memo salt must not be committed to deployment config");
+    assert.equal(env.vars.AD_DADDY_PAYMENT_EVENT_SECRET, undefined, "payment event secret must not be committed to deployment config");
   }
+  const workerBindings = await readFile("worker-configuration.d.ts", "utf8");
+  assert.match(workerBindings, /AD_DADDY_MEMO_SALT: string/);
+  assert.match(workerBindings, /AD_DADDY_PAYMENT_EVENT_SECRET: string/);
+  assert.match(workerBindings, /AD_DADDY_ENV: "test" \| "staging" \| "production"/);
 });
 
 test("auction worker exports a durable object with isolated bindings", async () => {

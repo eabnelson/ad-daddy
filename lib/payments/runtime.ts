@@ -1,50 +1,69 @@
 import { FixedWindowRateLimiter } from "../http/rate-limit.ts";
 import { campaignRuntime } from "../marketplace/campaign-registry.ts";
 import { AttributionService, ConversionEvidenceVerifier } from "../marketplace/attribution.ts";
-import { DepositService } from "./deposits.ts";
-import { InMemoryLedgerRepository, LedgerService } from "./ledger.ts";
+import { getPaymentCore, type PaymentBindings } from "./deposit-runtime.ts";
 import { PayoutDestinationRegistry, PayoutService } from "./payouts.ts";
-import { RefundService } from "./refunds.ts";
-import {
-  SyntheticTempoClient,
-  TEMPO_MODERATO_ALPHA_USD,
-  TEMPO_MODERATO_CHAIN_ID,
-} from "./tempo-client.ts";
-import type { CampaignBudgetSnapshot } from "../marketplace/budget.ts";
-import type { PaymentPolicyContext } from "./payment-policy.ts";
+import { RefundApprovalRegistry, RefundHumanProofStore, RefundService } from "./refunds.ts";
+import { SyntheticTempoClient, TEMPO_MODERATO_ALPHA_USD } from "./tempo-client.ts";
 
-const environment = process.env.AD_DADDY_ENV === "production" ? "production" : "test";
-const policy: PaymentPolicyContext = Object.freeze({
-  environment,
-  policyVersion: "closed-beta-payments/v1",
-  chainId: TEMPO_MODERATO_CHAIN_ID,
-  tokenAddress: TEMPO_MODERATO_ALPHA_USD,
-  allowlistedChainId: TEMPO_MODERATO_CHAIN_ID,
-  allowlistedTokenAddress: TEMPO_MODERATO_ALPHA_USD,
-  productionFundsEnabled: false,
-  approvals: Object.freeze({ legal: false, custody: false, dataProtection: false, designPartners: false }),
-});
-const ledgerRepository = new InMemoryLedgerRepository();
-const ledger = new LedgerService(ledgerRepository);
-const tempo = new SyntheticTempoClient();
-const memoSalt = process.env.AD_DADDY_MEMO_SALT ?? `runtime-${crypto.randomUUID()}-${crypto.randomUUID()}`;
-const destinations = new PayoutDestinationRegistry(86_400_000);
-const conversionVerifier = new ConversionEvidenceVerifier();
+export async function createPaymentRuntime(bindings: PaymentBindings): Promise<PaymentRuntime> {
+  const { createPaymentCore } = await import("./deposit-runtime.ts");
+  return assemble(createPaymentCore(bindings));
+}
 
-export const paymentRuntime = Object.freeze({
-  policy,
-  memoSalt,
-  ledger,
-  ledgerRepository,
-  tempo,
-  deposits: new DepositService(ledger, policy, `0x${"1".repeat(40)}`),
-  destinations,
-  payouts: new PayoutService({ destinations, tempo, ledger, policy, tokenAddress: TEMPO_MODERATO_ALPHA_USD, memoSalt, periodCeilingMinor: 100_000 }),
-  refunds: new RefundService({ tempo, ledger, policy, tokenAddress: TEMPO_MODERATO_ALPHA_USD, memoSalt }),
-  conversionVerifier,
-  attribution: new AttributionService(campaignRuntime.budgets, ledger, conversionVerifier),
-  closedCampaigns: new Map<string, CampaignBudgetSnapshot>(),
-  rateLimit: new FixedWindowRateLimiter({ limit: 30, windowMs: 60_000, maxRetryAfterSeconds: 60 }),
-});
+let runtime: PaymentRuntime | undefined;
+export async function getPaymentRuntime(): Promise<PaymentRuntime> {
+  if (!runtime) runtime = assemble(await getPaymentCore());
+  return runtime;
+}
 
-export type PaymentRuntime = typeof paymentRuntime;
+function assemble(core: Awaited<ReturnType<typeof getPaymentCore>>): PaymentRuntime {
+  const tempo = new SyntheticTempoClient();
+  const destinations = new PayoutDestinationRegistry(86_400_000, core.stateRepository);
+  const conversionVerifier = new ConversionEvidenceVerifier();
+  const refundProofs = new RefundHumanProofStore(core.refundApprovalRepository);
+  const refundApprovals = new RefundApprovalRegistry(refundProofs);
+  return Object.freeze({
+    policy: core.policy,
+    memoSalt: core.memoSalt,
+    ledger: core.ledger,
+    ledgerRepository: core.ledgerRepository,
+    paymentStateRepository: core.stateRepository,
+    tempo,
+    deposits: core.deposits,
+    operatorEvents: core.operatorEvents,
+    destinations,
+    payouts: new PayoutService({
+      destinations, tempo, ledger: core.ledger, policy: core.policy, tokenAddress: TEMPO_MODERATO_ALPHA_USD,
+      memoSalt: core.memoSalt, periodCeilingMinor: 100_000, repository: core.stateRepository,
+    }),
+    refundProofs,
+    refundApprovals,
+    refunds: new RefundService({
+      tempo, ledger: core.ledger, policy: core.policy, tokenAddress: TEMPO_MODERATO_ALPHA_USD,
+      memoSalt: core.memoSalt, budgets: campaignRuntime.budgets, approvals: refundApprovals, repository: core.stateRepository,
+    }),
+    conversionVerifier,
+    attribution: new AttributionService(campaignRuntime.budgets, core.ledger, conversionVerifier),
+    rateLimit: new FixedWindowRateLimiter({ limit: 30, windowMs: 60_000, maxRetryAfterSeconds: 60 }),
+  });
+}
+
+export interface PaymentRuntime {
+  readonly policy: Awaited<ReturnType<typeof getPaymentCore>>["policy"];
+  readonly memoSalt: string;
+  readonly ledger: Awaited<ReturnType<typeof getPaymentCore>>["ledger"];
+  readonly ledgerRepository: Awaited<ReturnType<typeof getPaymentCore>>["ledgerRepository"];
+  readonly paymentStateRepository: Awaited<ReturnType<typeof getPaymentCore>>["stateRepository"];
+  readonly tempo: SyntheticTempoClient;
+  readonly deposits: Awaited<ReturnType<typeof getPaymentCore>>["deposits"];
+  readonly operatorEvents: Awaited<ReturnType<typeof getPaymentCore>>["operatorEvents"];
+  readonly destinations: PayoutDestinationRegistry;
+  readonly payouts: PayoutService;
+  readonly refundProofs: RefundHumanProofStore;
+  readonly refundApprovals: RefundApprovalRegistry;
+  readonly refunds: RefundService;
+  readonly conversionVerifier: ConversionEvidenceVerifier;
+  readonly attribution: AttributionService;
+  readonly rateLimit: FixedWindowRateLimiter;
+}

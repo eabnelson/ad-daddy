@@ -16,6 +16,7 @@ export interface CampaignBudgetSnapshot {
   spentMinor: number;
   reservedMinor: number;
   heldMinor: number;
+  refundedMinor: number;
   withdrawableMinor: number;
   dailyCapMinor: number;
   history: readonly BudgetReservation[];
@@ -32,6 +33,7 @@ interface BudgetRecord {
   reservations: Map<string, BudgetReservation>;
   holds: Map<string, number>;
   committedHolds: Map<string, number>;
+  refunds: Map<string, number>;
 }
 
 export class CampaignBudgetService {
@@ -54,6 +56,7 @@ export class CampaignBudgetService {
       reservations: new Map(),
       holds: new Map(),
       committedHolds: new Map(),
+      refunds: new Map(),
     });
     return this.snapshot(input.campaignId);
   }
@@ -180,13 +183,31 @@ export class CampaignBudgetService {
     });
   }
 
+  async withdraw(campaignId: string, refundId: string, amountMinor: number): Promise<CampaignBudgetSnapshot> {
+    return this.#serial.run(campaignId, () => {
+      const record = this.require(campaignId);
+      if (!refundId) throw new Error("Refund id is required");
+      const existing = record.refunds.get(refundId);
+      if (existing !== undefined) {
+        if (existing !== amountMinor) throw new Error("Refund idempotency key collision");
+        return this.toSnapshot(record);
+      }
+      if (record.status !== "closed") throw new Error("Campaign must be closed before refund");
+      assertAmount(amountMinor, "refund amount");
+      const withdrawableMinor = this.withdrawableMinor(record);
+      if (amountMinor !== withdrawableMinor) throw new Error("Refund must equal the currently withdrawable campaign balance");
+      record.refunds.set(refundId, amountMinor);
+      return this.toSnapshot(record);
+    });
+  }
+
   snapshot(campaignId: string): CampaignBudgetSnapshot {
     return this.toSnapshot(this.require(campaignId));
   }
 
   balance(campaignId: string): Readonly<{ withdrawableMinor: number }> {
     const record = this.require(campaignId);
-    return Object.freeze({ withdrawableMinor: record.fundedMinor - record.spentMinor - record.reservedMinor - record.heldMinor });
+    return Object.freeze({ withdrawableMinor: this.withdrawableMinor(record) });
   }
 
   private require(campaignId: string): BudgetRecord {
@@ -196,6 +217,7 @@ export class CampaignBudgetService {
   }
 
   private toSnapshot(record: BudgetRecord): CampaignBudgetSnapshot {
+    const refundedMinor = [...record.refunds.values()].reduce((total, amountMinor) => total + amountMinor, 0);
     return Object.freeze({
       campaignId: record.campaignId,
       status: record.status,
@@ -203,10 +225,16 @@ export class CampaignBudgetService {
       spentMinor: record.spentMinor,
       reservedMinor: record.reservedMinor,
       heldMinor: record.heldMinor,
-      withdrawableMinor: record.fundedMinor - record.spentMinor - record.reservedMinor - record.heldMinor,
+      refundedMinor,
+      withdrawableMinor: this.withdrawableMinor(record),
       dailyCapMinor: record.dailyCapMinor,
       history: Object.freeze([...record.reservations.values()].map((item) => Object.freeze({ ...item }))),
     });
+  }
+
+  private withdrawableMinor(record: BudgetRecord): number {
+    const refundedMinor = [...record.refunds.values()].reduce((total, amountMinor) => total + amountMinor, 0);
+    return record.fundedMinor - record.spentMinor - record.reservedMinor - record.heldMinor - refundedMinor;
   }
 }
 

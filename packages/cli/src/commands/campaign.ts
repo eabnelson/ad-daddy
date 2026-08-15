@@ -8,7 +8,7 @@ export interface CampaignDraft {
   campaignId: string;
   accountId: string;
   advertiserTermsVersion: string;
-  brand: { name: string; verifiedDomain: string; ownershipVerified: boolean };
+  brand: { name: string; verifiedDomain: string; verificationId: string };
   destinationUrl: string;
   schedule: { startsAt: string; endsAt: string };
   allowlistedDestinationHosts: readonly string[];
@@ -61,19 +61,57 @@ export interface CampaignRepository {
   put(campaign: CampaignRecord): Promise<void>;
 }
 
+export interface BrandVerificationRecord {
+  verificationId: string;
+  accountId: string;
+  verifiedDomain: string;
+  status: "active" | "revoked";
+  verifiedAt: string;
+}
+
+export interface BrandVerificationRepository {
+  get(verificationId: string): Promise<BrandVerificationRecord | undefined>;
+}
+
+export interface CampaignFundingAuthority {
+  requireCreditedCampaignDeposit(input: { campaignId: string; advertiserAccountId: string; amountMinor: number }): Promise<{ depositId: string }>;
+  withCreditedCampaignDeposit<T>(input: { campaignId: string; advertiserAccountId: string; amountMinor: number }, action: () => Promise<T>): Promise<T>;
+}
+
 export class MemoryCampaignRepository implements CampaignRepository {
   readonly #records = new Map<string, CampaignRecord>();
   async get(id: string) { const value = this.#records.get(id); return value ? structuredClone(value) : undefined; }
   async put(value: CampaignRecord) { this.#records.set(value.campaignId, structuredClone(value)); }
 }
 
+export class MemoryBrandVerificationRepository implements BrandVerificationRepository {
+  readonly #records = new Map<string, BrandVerificationRecord>();
+  async get(id: string) { const value = this.#records.get(id); return value ? structuredClone(value) : undefined; }
+  verify(value: BrandVerificationRecord) {
+    if (!value.verificationId || !value.accountId || !/^([a-z0-9-]+\.)+[a-z]{2,}$/i.test(value.verifiedDomain) || !Number.isFinite(Date.parse(value.verifiedAt))) throw new Error("Brand verification record is invalid");
+    const existing = this.#records.get(value.verificationId);
+    if (existing && (existing.accountId !== value.accountId || existing.verifiedDomain.toLowerCase() !== value.verifiedDomain.toLowerCase())) throw new Error("Brand verification identity cannot be rebound");
+    const stored = { ...structuredClone(value), verifiedDomain: value.verifiedDomain.toLowerCase() };
+    this.#records.set(value.verificationId, stored);
+    return structuredClone(stored);
+  }
+}
+
 export class CampaignService {
   readonly #repository: CampaignRepository;
   readonly #budgets: BudgetService;
-  constructor(repository: CampaignRepository, budgets: BudgetService) { this.#repository = repository; this.#budgets = budgets; }
+  readonly #brandVerifications: BrandVerificationRepository;
+  readonly #funding: CampaignFundingAuthority;
+  constructor(repository: CampaignRepository, budgets: BudgetService, brandVerifications: BrandVerificationRepository, funding: CampaignFundingAuthority) {
+    this.#repository = repository;
+    this.#budgets = budgets;
+    this.#brandVerifications = brandVerifications;
+    this.#funding = funding;
+  }
 
   async prepare(input: CampaignDraft): Promise<CampaignRecord> {
     validateCampaign(input);
+    await this.#assertBrandVerification(input.accountId, input.brand.verifiedDomain, input.brand.verificationId);
     const existing = await this.#repository.get(input.campaignId);
     if (existing?.status === "closed") throw new Error("Closed campaigns cannot be changed");
     if (existing && existing.accountId !== input.accountId) throw new Error("Campaign belongs to another advertiser account");
@@ -89,24 +127,29 @@ export class CampaignService {
     return structuredClone(record);
   }
 
-  async fund(campaignId: string, amountMinor: number, approval: CampaignApproval, now = new Date()): Promise<CampaignRecord> {
+  async fund(campaignId: string, approval: CampaignApproval, now = new Date()): Promise<CampaignRecord> {
     const campaign = await this.require(campaignId);
     assertApproval(campaign, approval, ["advertiser_verify", "terms_accept", "campaign_fund"], now);
-    if (amountMinor !== campaign.maximumSpendMinor || approval.approvedMaximumSpendMinor !== amountMinor) throw new Error("Funding must match the human-approved maximum spend");
-    if (campaign.fundedMinor === amountMinor && campaign.status === "funding_pending") return structuredClone(campaign);
-    if (campaign.fundedMinor !== 0) throw new Error("Campaign is already funded");
-    this.#budgets.open({ campaignId, fundedMinor: amountMinor, dailyCapMinor: campaign.dailyCapMinor });
-    campaign.fundedMinor = amountMinor;
-    campaign.status = "funding_pending";
-    campaign.termsAcceptedAt = now.toISOString();
-    await this.#repository.put(campaign);
-    return structuredClone(campaign);
+    if (approval.approvedMaximumSpendMinor !== campaign.maximumSpendMinor) throw new Error("Funding must match the human-approved maximum spend");
+    return this.#funding.withCreditedCampaignDeposit(
+      { campaignId, advertiserAccountId: campaign.accountId, amountMinor: campaign.maximumSpendMinor },
+      async () => {
+        if (campaign.fundedMinor === campaign.maximumSpendMinor && campaign.status === "funding_pending") return structuredClone(campaign);
+        if (campaign.fundedMinor !== 0) throw new Error("Campaign is already funded");
+        this.#budgets.open({ campaignId, fundedMinor: campaign.maximumSpendMinor, dailyCapMinor: campaign.dailyCapMinor });
+        campaign.fundedMinor = campaign.maximumSpendMinor;
+        campaign.status = "funding_pending";
+        campaign.termsAcceptedAt = now.toISOString();
+        await this.#repository.put(campaign);
+        return structuredClone(campaign);
+      },
+    );
   }
 
   async activate(campaignId: string, approval: CampaignApproval | undefined, now = new Date()): Promise<CampaignRecord> {
     const campaign = await this.require(campaignId);
     if (!approval) throw new Error("Human approval is required for production activation");
-    assertActivationReady(campaign);
+    await this.#assertActivationReady(campaign);
     assertApproval(campaign, approval, ["advertiser_verify", "terms_accept", "campaign_fund", "production_activate"], now);
     if (Date.parse(campaign.schedule.endsAt) <= now.getTime()) throw new Error("Campaign schedule has already ended");
     if (campaign.fundedMinor < campaign.maximumSpendMinor || this.#budgets.balance(campaignId).withdrawableMinor <= 0) throw new Error("Campaign must be funded before activation");
@@ -128,7 +171,7 @@ export class CampaignService {
   async resume(campaignId: string): Promise<CampaignRecord> {
     const campaign = await this.require(campaignId);
     if (campaign.status !== "paused" || !campaign.activatedAt) throw new Error("Only a previously approved paused campaign can resume");
-    assertActivationReady(campaign);
+    await this.#assertActivationReady(campaign);
     await this.#budgets.resume(campaignId);
     campaign.status = "active";
     await this.#repository.put(campaign);
@@ -167,19 +210,30 @@ export class CampaignService {
   private async requireActive(campaignId: string, now = new Date()) {
     const campaign = await this.require(campaignId);
     if (campaign.status !== "active") throw new Error(`Campaign is ${campaign.status}; active status is required`);
-    assertActivationReady(campaign);
+    await this.#assertActivationReady(campaign);
     if (Date.parse(campaign.schedule.startsAt) > now.getTime() || Date.parse(campaign.schedule.endsAt) <= now.getTime()) throw new Error("Campaign is outside its approved schedule");
     return campaign;
+  }
+  async #assertActivationReady(campaign: CampaignRecord): Promise<void> {
+    await this.#assertBrandVerification(campaign.accountId, campaign.brand.verifiedDomain, campaign.brand.verificationId);
+    await this.#funding.requireCreditedCampaignDeposit({ campaignId: campaign.campaignId, advertiserAccountId: campaign.accountId, amountMinor: campaign.maximumSpendMinor });
+    assertActivationReady(campaign);
+  }
+  async #assertBrandVerification(accountId: string, domain: string, verificationId: string): Promise<void> {
+    const record = await this.#brandVerifications.get(verificationId);
+    if (!record || record.status !== "active" || record.accountId !== accountId || record.verifiedDomain.toLowerCase() !== domain.toLowerCase()) {
+      throw new Error("An active server-verified brand ownership record for this account and domain is required");
+    }
   }
 }
 
 function validateCampaign(input: CampaignDraft): void {
   const allowedKeys = new Set(["campaignId", "accountId", "advertiserTermsVersion", "brand", "destinationUrl", "allowlistedDestinationHosts", "schedule", "categories", "regions", "hosts", "rewardTypes", "creative", "maximumSpendMinor", "maximumBidMinor", "dailyCapMinor", "guaranteedPlacementMinor", "conversionBonusMinor", "conversionTerms", "perUserFrequencyLimit"]);
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some((key) => !allowedKeys.has(key))) throw new Error("Campaign contains unsupported fields");
-  if (!input.brand || typeof input.brand !== "object" || Array.isArray(input.brand) || Object.keys(input.brand).some((key) => !["name", "verifiedDomain", "ownershipVerified"].includes(key)) || typeof input.brand.ownershipVerified !== "boolean") throw new Error("Campaign brand is invalid");
+  if (!input.brand || typeof input.brand !== "object" || Array.isArray(input.brand) || Object.keys(input.brand).some((key) => !["name", "verifiedDomain", "verificationId"].includes(key)) || typeof input.brand.verificationId !== "string") throw new Error("Campaign brand is invalid");
   if (!input.creative || typeof input.creative !== "object" || Array.isArray(input.creative) || Object.keys(input.creative).some((key) => !["headline", "body"].includes(key))) throw new Error("Campaign creative is invalid");
   if (!input.schedule || typeof input.schedule !== "object" || Array.isArray(input.schedule) || Object.keys(input.schedule).some((key) => !["startsAt", "endsAt"].includes(key))) throw new Error("Campaign schedule is invalid");
-  for (const [name, value] of [["campaignId", input.campaignId], ["accountId", input.accountId], ["terms version", input.advertiserTermsVersion], ["brand name", input.brand.name], ["conversion terms", input.conversionTerms]] as const) {
+  for (const [name, value] of [["campaignId", input.campaignId], ["accountId", input.accountId], ["terms version", input.advertiserTermsVersion], ["brand name", input.brand.name], ["brand verification ID", input.brand.verificationId], ["conversion terms", input.conversionTerms]] as const) {
     if (!value || value.length > 512) throw new Error(`${name} is required and bounded`);
   }
   if (input.advertiserTermsVersion !== ADVERTISER_TERMS_VERSION) throw new Error(`Advertiser terms ${ADVERTISER_TERMS_VERSION} must be accepted`);
@@ -204,7 +258,6 @@ function parseDestination(value: string): URL {
   return url;
 }
 function assertActivationReady(campaign: CampaignRecord): void {
-  if (!campaign.brand.ownershipVerified) throw new Error("Brand ownership must be verified");
   parseDestination(campaign.destinationUrl);
   if (!campaign.advertiserTermsVersion || !campaign.termsAcceptedAt) throw new Error("Versioned advertiser terms must be accepted");
 }

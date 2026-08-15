@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 
-import { CampaignService, MemoryCampaignRepository, ADVERTISER_TERMS_VERSION, type CampaignApproval, type CampaignDraft } from "@ad-daddy/cli/campaign";
+import { CampaignService, MemoryBrandVerificationRepository, MemoryCampaignRepository, ADVERTISER_TERMS_VERSION, type CampaignApproval, type CampaignDraft } from "@ad-daddy/cli/campaign";
 import { buildPublishedProfile } from "@ad-daddy/cli";
 import { createPlacementHistoryHandler } from "../../app/api/v1/placements/route.ts";
 import { createReportHandler } from "../../app/api/v1/reports/route.ts";
@@ -31,10 +31,15 @@ test("seeded receiver and advertiser agents clear an auction, create one sponsor
   assert.deepEqual(Object.keys(published).sort(), ["acceptedRewardTypes", "coarseLocation", "minimumTakeHomeMinor", "privateRepoTechStacks", "projectDescriptions"]);
 
   const budgets = new CampaignBudgetService();
-  const campaigns = new CampaignService(new MemoryCampaignRepository(), budgets);
+  const brands = new MemoryBrandVerificationRepository();
+  brands.verify({ verificationId: "brand_neon", accountId: "advertiser_1", verifiedDomain: "neon.tech", status: "active", verifiedAt: NOW.toISOString() });
+  const campaigns = new CampaignService(new MemoryCampaignRepository(), budgets, brands, {
+    requireCreditedCampaignDeposit: async () => ({ depositId: "deposit_demo" }),
+    withCreditedCampaignDeposit: async <T>(_input: unknown, action: () => Promise<T>) => action(),
+  });
   const draft = campaignDraft();
   await campaigns.prepare(draft);
-  await campaigns.fund(draft.campaignId, draft.maximumSpendMinor, approval(["advertiser_verify", "terms_accept", "campaign_fund"]), NOW);
+  await campaigns.fund(draft.campaignId, approval(["advertiser_verify", "terms_accept", "campaign_fund"]), NOW);
   await campaigns.activate(draft.campaignId, approval(["advertiser_verify", "terms_accept", "campaign_fund", "production_activate"]), NOW);
   const opportunities = await campaigns.search(draft.campaignId, [{
     rotatingOpportunityId: "opportunity_1", category: "developer-tools", region: "US Northeast", host: "codex",
@@ -123,7 +128,7 @@ test("seeded receiver and advertiser agents clear an auction, create one sponsor
 function campaignDraft(): CampaignDraft {
   return {
     campaignId: "campaign_neon", accountId: "advertiser_1", advertiserTermsVersion: ADVERTISER_TERMS_VERSION,
-    brand: { name: "Neon", verifiedDomain: "neon.tech", ownershipVerified: true }, destinationUrl: "https://neon.tech/docs",
+    brand: { name: "Neon", verifiedDomain: "neon.tech", verificationId: "brand_neon" }, destinationUrl: "https://neon.tech/docs",
     schedule: { startsAt: "2026-08-15T11:00:00.000Z", endsAt: "2026-08-16T12:00:00.000Z" }, allowlistedDestinationHosts: ["neon.tech"],
     categories: ["developer-tools"], regions: ["US Northeast"], hosts: ["codex"], rewardTypes: ["stablecoin"],
     creative: { headline: "Branch Postgres for every preview", body: "Create an isolated database branch for every preview." },

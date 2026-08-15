@@ -1,9 +1,10 @@
 import { PAYMENT_REQUEST_LIMITS, parseBoundedJson, RequestLimitError } from "../../../../../../lib/http/request-limits.ts";
 import type { SignedConversionEvidence } from "../../../../../../lib/marketplace/attribution.ts";
-import { paymentRuntime, type PaymentRuntime } from "../../../../../../lib/payments/runtime.ts";
+import { getPaymentRuntime, type PaymentRuntime } from "../../../../../../lib/payments/runtime.ts";
 
-export function createConversionHandler(runtime: PaymentRuntime = paymentRuntime) {
+export function createConversionHandler(injectedRuntime?: PaymentRuntime) {
   return async function handle(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+    const runtime = injectedRuntime ?? await getPaymentRuntime();
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
     const limit = runtime.rateLimit.check([`conversion-ip:${ip}`]);
     if (!limit.allowed) return rateLimited(limit.retryAfterSeconds);

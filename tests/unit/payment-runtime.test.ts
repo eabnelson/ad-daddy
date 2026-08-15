@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { createPaymentCore, deployedEnvironment, type PaymentBindings } from "../../lib/payments/deposit-runtime.ts";
+import { D1LedgerRepository, D1PaymentStateRepository, D1RefundApprovalRepository } from "../../lib/payments/d1-repositories.ts";
+
+test("deployment environment selection fails closed", () => {
+  assert.equal(deployedEnvironment("test"), "test");
+  assert.equal(deployedEnvironment("staging"), "staging");
+  assert.equal(deployedEnvironment("production"), "production");
+  assert.equal(deployedEnvironment(undefined), "production");
+  assert.equal(deployedEnvironment("development"), "production");
+});
+
+test("payment core requires stable secret-backed memo and operator keys", () => {
+  const base = {
+    DB: {} as D1Database,
+    AD_DADDY_ENV: "test",
+    AD_DADDY_MEMO_SALT: "m".repeat(32),
+    AD_DADDY_PAYMENT_EVENT_SECRET: "e".repeat(32),
+  } satisfies PaymentBindings;
+  const core = createPaymentCore(base);
+  assert.equal(core.memoSalt, "m".repeat(32));
+  assert.ok(core.ledgerRepository instanceof D1LedgerRepository);
+  assert.ok(core.stateRepository instanceof D1PaymentStateRepository);
+  assert.ok(core.refundApprovalRepository instanceof D1RefundApprovalRepository);
+  assert.throws(() => createPaymentCore({ ...base, AD_DADDY_MEMO_SALT: "" }), /AD_DADDY_MEMO_SALT/);
+  assert.throws(() => createPaymentCore({ ...base, AD_DADDY_PAYMENT_EVENT_SECRET: "short" }), /AD_DADDY_PAYMENT_EVENT_SECRET/);
+  assert.equal(createPaymentCore({ ...base, AD_DADDY_ENV: "unexpected" }).policy.environment, "production");
+});

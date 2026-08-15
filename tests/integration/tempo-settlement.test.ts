@@ -6,6 +6,7 @@ import type { CodexDeliveryReceipt } from "@ad-daddy/host-adapters";
 import { CampaignBudgetService } from "../../lib/marketplace/budget.ts";
 import { DepositService } from "../../lib/payments/deposits.ts";
 import { InMemoryLedgerRepository, LedgerService } from "../../lib/payments/ledger.ts";
+import { InMemoryPaymentStateRepository } from "../../lib/payments/repository.ts";
 import { RewardVelocityGuard, SettlementService } from "../../lib/payments/settlement.ts";
 import { opaqueTempoMemo, TEMPO_MODERATO_ALPHA_USD, TEMPO_MODERATO_CHAIN_ID, type TempoTransferEvent } from "../../lib/payments/tempo-client.ts";
 
@@ -23,7 +24,7 @@ test("finalized Tempo deposit credits once, quarantines unknown memos, and compe
   const repository = new InMemoryLedgerRepository();
   const service = new DepositService(new LedgerService(repository), policy, TREASURY);
   const memo = opaqueTempoMemo("deposit", "commit_1", "test-salt");
-  service.register({
+  await service.register({
     commitmentId: "commit_1", campaignId: "campaign_1", advertiserAccountId: "human_adv",
     advertiserLedgerAccountId: "ledger_adv", treasuryLedgerAccountId: "ledger_treasury",
     amountMinor: 10_000, memo, expectedSender: SENDER,
@@ -44,6 +45,31 @@ test("finalized Tempo deposit credits once, quarantines unknown memos, and compe
   assert.equal(reorged.status, "reorged");
   assert.equal(repository.transactions.length, 2);
   assert.equal(repository.transactions.flatMap((transaction) => transaction.entries).reduce((sum, entry) => sum + entry.amountMinor, 0), 0);
+});
+
+test("deposit commitments, credits, and reorg reconciliation survive a cold start", async () => {
+  const ledgerRepository = new InMemoryLedgerRepository();
+  const ledger = new LedgerService(ledgerRepository);
+  const state = new InMemoryPaymentStateRepository();
+  const memo = opaqueTempoMemo("deposit", "commit_restart", "stable-secret-backed-salt");
+  const first = new DepositService(ledger, policy, TREASURY, state);
+  await first.register({
+    commitmentId: "commit_restart", campaignId: "campaign_restart", advertiserAccountId: "human_adv",
+    advertiserLedgerAccountId: "ledger_adv", treasuryLedgerAccountId: "ledger_treasury",
+    amountMinor: 10_000, memo, expectedSender: SENDER,
+  });
+  const event = transfer({ memo, transactionHash: `0x${"c".repeat(64)}` });
+  assert.equal((await first.process(event)).status, "credited");
+
+  const restarted = new DepositService(ledger, policy, TREASURY, state);
+  assert.deepEqual(await restarted.requireCreditedCampaignDeposit({
+    campaignId: "campaign_restart", advertiserAccountId: "human_adv", amountMinor: 10_000,
+  }), { depositId: `deposit:${TEMPO_MODERATO_CHAIN_ID}:0x${"c".repeat(64)}:0` });
+  assert.equal((await restarted.process({ ...event, status: "reorged" })).status, "reorged");
+  await assert.rejects(restarted.requireCreditedCampaignDeposit({
+    campaignId: "campaign_restart", advertiserAccountId: "human_adv", amountMinor: 10_000,
+  }), /credited, unreorged/);
+  assert.equal(ledgerRepository.transactions.length, 2);
 });
 
 test("a verified rendered receipt settles the reserved base reward once with exact 80/20 economics", async () => {

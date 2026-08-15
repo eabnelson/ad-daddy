@@ -1,14 +1,16 @@
 import { PAYMENT_REQUEST_LIMITS, parseBoundedJson, RequestLimitError } from "../../../../../lib/http/request-limits.ts";
 import { opaqueTempoMemo, type TempoTransferEvent } from "../../../../../lib/payments/tempo-client.ts";
-import { paymentRuntime, type PaymentRuntime } from "../../../../../lib/payments/runtime.ts";
+import { getPaymentRuntime, type PaymentRuntime } from "../../../../../lib/payments/runtime.ts";
 import { campaignRuntime, type CampaignRuntime } from "../../../../../lib/marketplace/campaign-registry.ts";
+import type { PaymentEventEnvelope } from "../../../../../lib/auth/operator-event-envelope.ts";
 
 type DepositBody =
   | { action: "prepare"; campaignId: string; amountMinor: number; expectedSender?: string }
-  | { action: "observe_finalized_event"; event: TempoTransferEvent };
+  | { action: "observe_finalized_event"; envelope: PaymentEventEnvelope };
 
-export function createDepositHandler(runtime: PaymentRuntime = paymentRuntime, campaigns: CampaignRuntime = campaignRuntime) {
+export function createDepositHandler(injectedRuntime?: PaymentRuntime, campaigns: CampaignRuntime = campaignRuntime) {
   return async function handle(request: Request): Promise<Response> {
+    const runtime = injectedRuntime ?? await getPaymentRuntime();
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
     const ipLimit = runtime.rateLimit.check([`deposit-ip:${ip}`]);
     if (!ipLimit.allowed) return rateLimited(ipLimit.retryAfterSeconds);
@@ -26,7 +28,7 @@ export function createDepositHandler(runtime: PaymentRuntime = paymentRuntime, c
         if (campaign.accountId !== accountId) return json(404, { error: "campaign_not_found" });
         if (campaign.maximumSpendMinor !== body.amountMinor) return json(400, { error: "deposit_must_match_campaign_maximum" });
         const memo = opaqueTempoMemo("deposit", `${accountId}:${body.campaignId}:${body.amountMinor}`, runtime.memoSalt);
-        const commitment = runtime.deposits.register({
+        const commitment = await runtime.deposits.register({
           commitmentId: `campaign:${body.campaignId}:deposit`, campaignId: body.campaignId,
           advertiserAccountId: accountId, advertiserLedgerAccountId: `advertiser:${accountId}`,
           treasuryLedgerAccountId: "treasury:tempo", amountMinor: body.amountMinor,
@@ -35,10 +37,13 @@ export function createDepositHandler(runtime: PaymentRuntime = paymentRuntime, c
         return json(201, { commitment, chainId: runtime.policy.chainId, tokenAddress: runtime.policy.tokenAddress });
       }
       if (body?.action === "observe_finalized_event") {
-        if (request.headers.get("oai-operator-scope") !== "payment-events") return json(403, { error: "payment_operator_required" });
-        const eventLimit = runtime.rateLimit.check([`deposit-memo:${body.event?.memo ?? "missing"}`]);
+        if (request.headers.has("oai-operator-scope")) return json(403, { error: "private_payment_event_capability_required" });
+        let event: TempoTransferEvent;
+        try { event = runtime.operatorEvents.verify(body.envelope); }
+        catch { return json(403, { error: "private_payment_event_capability_required" }); }
+        const eventLimit = runtime.rateLimit.check([`deposit-memo:${event.memo}`]);
         if (!eventLimit.allowed) return rateLimited(eventLimit.retryAfterSeconds);
-        return json(200, { deposit: await runtime.deposits.process(body.event) });
+        return json(200, { deposit: await runtime.deposits.process(event) });
       }
       return json(400, { error: "invalid_deposit_action" });
     } catch (error) { return json(409, { error: "deposit_rejected", message: boundedError(error) }); }

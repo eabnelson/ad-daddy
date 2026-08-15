@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { KeyedSerialExecutor } from "../runtime/keyed-serial.ts";
 import { LedgerService } from "./ledger.ts";
 import { assertPaymentPolicy, type PaymentPolicyContext } from "./payment-policy.ts";
+import { InMemoryPaymentStateRepository, type PaymentStateRepository } from "./repository.ts";
 import {
   opaqueTempoMemo,
   validateTempoAddress,
@@ -17,35 +19,38 @@ export interface PayoutDestinationApproval {
   proofVerified: boolean;
 }
 
-interface PayoutDestination {
+export interface PayoutDestination {
+  destinationId: string;
   address: string;
   approvedAt: string;
   activatesAt: string;
 }
 
 export class PayoutDestinationRegistry {
-  readonly #destinations = new Map<string, PayoutDestination[]>();
+  readonly #repository: PaymentStateRepository;
   readonly changeDelayMs: number;
-  constructor(changeDelayMs: number) {
+  constructor(changeDelayMs: number, repository: PaymentStateRepository = new InMemoryPaymentStateRepository()) {
     if (!Number.isSafeInteger(changeDelayMs) || changeDelayMs < 0) throw new Error("Payout address change delay is invalid");
     this.changeDelayMs = changeDelayMs;
+    this.#repository = repository;
   }
-  enroll(approval: PayoutDestinationApproval, now = new Date()): PayoutDestination {
+  async enroll(approval: PayoutDestinationApproval, now = new Date()): Promise<PayoutDestination> {
     validateTempoAddress(approval.address);
     const approvedAt = Date.parse(approval.approvedAt);
     const expiresAt = Date.parse(approval.expiresAt);
     if (!approval.proofVerified || approval.purpose !== "payout_destination" || !Number.isFinite(approvedAt) || !Number.isFinite(expiresAt) || approvedAt > now.getTime() || expiresAt <= now.getTime()) throw new Error("Fresh human payout destination approval is required");
-    const current = this.#destinations.get(approval.humanId) ?? [];
+    const current = await this.#repository.listPayoutDestinations(approval.humanId);
     const replay = current.find((item) => item.address.toLowerCase() === approval.address.toLowerCase() && item.approvedAt === approval.approvedAt);
     if (replay) return replay;
     const activatesAt = new Date(approvedAt + (current.length === 0 ? 0 : this.changeDelayMs)).toISOString();
-    const destination = Object.freeze({ address: approval.address, approvedAt: approval.approvedAt, activatesAt });
-    current.push(destination);
-    this.#destinations.set(approval.humanId, current);
-    return destination;
+    const destination = Object.freeze({
+      destinationId: `destination:${createHash("sha256").update(`${approval.humanId}\0${approval.address.toLowerCase()}\0${approval.approvedAt}`).digest("hex")}`,
+      address: approval.address, approvedAt: approval.approvedAt, activatesAt,
+    });
+    return this.#repository.putPayoutDestination(approval.humanId, destination);
   }
-  resolve(humanId: string, now = new Date()): PayoutDestination {
-    const eligible = (this.#destinations.get(humanId) ?? []).filter((item) => Date.parse(item.activatesAt) <= now.getTime());
+  async resolve(humanId: string, now = new Date()): Promise<PayoutDestination> {
+    const eligible = (await this.#repository.listPayoutDestinations(humanId)).filter((item) => Date.parse(item.activatesAt) <= now.getTime());
     const destination = eligible.at(-1);
     if (!destination) throw new Error("No verified payout destination is active");
     return destination;
@@ -58,6 +63,7 @@ export interface PayoutRecord {
   receiverLedgerAccountId: string;
   treasuryLedgerAccountId: string;
   destination: string;
+  destinationId: string;
   amountMinor: number;
   memo: string;
   status: "queued" | "failed" | "paid";
@@ -68,8 +74,6 @@ export interface PayoutRecord {
 }
 
 export class PayoutService {
-  readonly #records = new Map<string, PayoutRecord>();
-  readonly #periodTotals = new Map<string, number>();
   readonly #serial = new KeyedSerialExecutor();
   readonly #destinations: PayoutDestinationRegistry;
   readonly #tempo: TempoClient;
@@ -78,6 +82,7 @@ export class PayoutService {
   readonly #tokenAddress: string;
   readonly #memoSalt: string;
   readonly #periodCeilingMinor: number;
+  readonly #repository: PaymentStateRepository;
   constructor(input: {
     destinations: PayoutDestinationRegistry;
     tempo: TempoClient;
@@ -86,10 +91,12 @@ export class PayoutService {
     tokenAddress: string;
     memoSalt: string;
     periodCeilingMinor: number;
+    repository?: PaymentStateRepository;
   }) {
     this.#destinations = input.destinations; this.#tempo = input.tempo; this.#ledger = input.ledger;
     this.#policy = input.policy; this.#tokenAddress = input.tokenAddress; this.#memoSalt = input.memoSalt;
     this.#periodCeilingMinor = input.periodCeilingMinor;
+    this.#repository = input.repository ?? new InMemoryPaymentStateRepository();
     if (!Number.isSafeInteger(input.periodCeilingMinor) || input.periodCeilingMinor < 1) throw new Error("Payout period ceiling is invalid");
   }
 
@@ -101,35 +108,35 @@ export class PayoutService {
     amountMinor: number;
     now?: Date;
     humanApprovedCeilingOverride?: boolean;
-  }): PayoutRecord {
-    const now = input.now ?? new Date();
-    assertAmount(input.amountMinor);
-    const existing = this.#records.get(input.payoutId);
-    if (existing) {
-      if (existing.amountMinor !== input.amountMinor || existing.receiverHumanId !== input.receiverHumanId ||
-        existing.receiverLedgerAccountId !== input.receiverLedgerAccountId || existing.treasuryLedgerAccountId !== input.treasuryLedgerAccountId) throw new Error("Payout idempotency collision");
-      return existing;
-    }
-    const destination = this.#destinations.resolve(input.receiverHumanId, now);
-    const period = now.toISOString().slice(0, 10);
-    const total = this.#periodTotals.get(period) ?? 0;
-    if (total + input.amountMinor > this.#periodCeilingMinor && !input.humanApprovedCeilingOverride) throw new Error("Payout batch exceeds the treasury period ceiling");
-    this.#periodTotals.set(period, total + input.amountMinor);
-    const record: PayoutRecord = Object.freeze({
-      payoutId: input.payoutId, receiverHumanId: input.receiverHumanId,
-      receiverLedgerAccountId: input.receiverLedgerAccountId,
-      treasuryLedgerAccountId: input.treasuryLedgerAccountId,
-      destination: destination.address, amountMinor: input.amountMinor,
-      memo: opaqueTempoMemo("payout", input.payoutId, this.#memoSalt),
-      status: "queued", policyVersion: this.#policy.policyVersion, queuedAt: now.toISOString(),
+  }): Promise<PayoutRecord> {
+    return this.#serial.run(input.payoutId, async () => {
+      const now = input.now ?? new Date();
+      assertAmount(input.amountMinor);
+      const existing = await this.#repository.getPayout(input.payoutId);
+      if (existing) {
+        if (existing.amountMinor !== input.amountMinor || existing.receiverHumanId !== input.receiverHumanId ||
+          existing.receiverLedgerAccountId !== input.receiverLedgerAccountId || existing.treasuryLedgerAccountId !== input.treasuryLedgerAccountId) throw new Error("Payout idempotency collision");
+        return existing;
+      }
+      const destination = await this.#destinations.resolve(input.receiverHumanId, now);
+      const period = now.toISOString().slice(0, 10);
+      const total = await this.#repository.payoutTotalForPeriod(period);
+      if (total + input.amountMinor > this.#periodCeilingMinor && !input.humanApprovedCeilingOverride) throw new Error("Payout batch exceeds the treasury period ceiling");
+      const record: PayoutRecord = Object.freeze({
+        payoutId: input.payoutId, receiverHumanId: input.receiverHumanId,
+        receiverLedgerAccountId: input.receiverLedgerAccountId,
+        treasuryLedgerAccountId: input.treasuryLedgerAccountId,
+        destination: destination.address, destinationId: destination.destinationId, amountMinor: input.amountMinor,
+        memo: opaqueTempoMemo("payout", input.payoutId, this.#memoSalt),
+        status: "queued", policyVersion: this.#policy.policyVersion, queuedAt: now.toISOString(),
+      });
+      return this.#repository.putPayout(record);
     });
-    this.#records.set(input.payoutId, record);
-    return record;
   }
 
   send(payoutId: string): Promise<PayoutRecord> {
     return this.#serial.run(payoutId, async () => {
-      const record = this.#records.get(payoutId);
+      const record = await this.#repository.getPayout(payoutId);
       if (!record) throw new Error("Unknown payout");
       if (record.status === "paid") return record;
       assertPaymentPolicy({ ...this.#policy, chainId: this.#tempo.chainId, tokenAddress: this.#tokenAddress });
@@ -141,11 +148,11 @@ export class PayoutService {
         });
       } catch (error) {
         const failed: PayoutRecord = Object.freeze({ ...record, status: "failed", failureReason: boundedError(error) });
-        this.#records.set(payoutId, failed); return failed;
+        return this.#repository.putPayout(failed);
       }
       if (receipt.status !== "confirmed") {
         const failed: PayoutRecord = Object.freeze({ ...record, status: "failed", failureReason: receipt.failureReason ?? "Tempo transfer failed" });
-        this.#records.set(payoutId, failed); return failed;
+        return this.#repository.putPayout(failed);
       }
       await this.#ledger.post({
         transactionId: `payout:${payoutId}`, idempotencyKey: `tempo:payout:${record.memo}`,
@@ -157,7 +164,7 @@ export class PayoutService {
         ],
       });
       const paid: PayoutRecord = Object.freeze({ ...record, status: "paid", transactionHash: receipt.transactionHash, failureReason: undefined });
-      this.#records.set(payoutId, paid); return paid;
+      return this.#repository.putPayout(paid);
     });
   }
 }

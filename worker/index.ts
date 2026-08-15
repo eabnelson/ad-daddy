@@ -6,6 +6,9 @@ interface Env {
   AUCTION_SERVICE: Fetcher;
   ASSETS: Fetcher;
   DB: D1Database;
+  AD_DADDY_ENV: "test" | "staging" | "production";
+  AD_DADDY_MEMO_SALT: string;
+  AD_DADDY_PAYMENT_EVENT_SECRET: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -29,6 +32,10 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/api/v1/payments/deposits" && request.headers.has("oai-operator-scope")) {
+      return Response.json({ error: "private_payment_event_capability_required" }, { status: 403 });
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

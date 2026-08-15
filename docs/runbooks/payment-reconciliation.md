@@ -2,6 +2,8 @@
 
 Ad Daddy uses Tempo transfer memos as opaque 32-byte commitments. Internal IDs, receiver IDs, campaign IDs, and placement IDs never appear in an onchain memo. The launch build targets Moderato testnet and keeps production funds disabled.
 
+Every deployed environment must set `AD_DADDY_ENV` explicitly. Provision `AD_DADDY_MEMO_SALT` and `AD_DADDY_PAYMENT_EVENT_SECRET` with `wrangler secret put <NAME> --env <environment>` before enabling payment routes. The latter authenticates signed envelopes from the private chain indexer; a caller-supplied operator header is always rejected. Use one high-entropy memo salt per environment and restore that same secret during rollback or disaster recovery; rotating it while queued payouts or refunds exist is prohibited because it would change their onchain idempotency memos.
+
 ## Daily proof
 
 Reconcile each finalized deposit, payout, and refund by chain ID, token address, transaction hash, log index where applicable, opaque memo, amount, policy version, and internal ledger transaction. Confirm every internal transaction is balanced and every paid outbound record has exactly one confirmed Tempo receipt.
@@ -31,4 +33,4 @@ Keep the campaign hold active. Verify the allowlisted provider key, evidence ID,
 
 ## Campaign refund
 
-Close the campaign before computing withdrawable funds. Show funded, spent, reserved, held, and withdrawable amounts separately. A verified human approves the refund address and exact withdrawable amount with recent authentication. Retry with the same refund ID and opaque memo until the onchain receipt is confirmed.
+Close the campaign before computing withdrawable funds. Show funded, spent, reserved, held, and withdrawable amounts separately. After server-side WebAuthn and wallet-signature verification, issue one opaque, single-use approval ID bound to the account, campaign, refund address, exact amount, nonce, and expiry. The client submits only that approval ID; never accept caller-authored address, amount, or `recentAuthentication` assertions. Retry with the same refund ID and opaque memo until the onchain receipt is confirmed.

@@ -43,6 +43,13 @@
       "when": 1786822005785,
       "tag": "0005_condemned_mac_gargan",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786825568429,
+      "tag": "0006_secret_wind_dancer",
+      "breakpoints": true
     }
   ]
 }

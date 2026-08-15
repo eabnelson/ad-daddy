@@ -6,7 +6,6 @@ interface CampaignRequestBody {
   action: "prepare" | "fund" | "activate" | "pause" | "close" | "issue_agent_token";
   campaign?: CampaignDraft;
   campaignId?: string;
-  amountMinor?: number;
   approval?: CampaignApproval;
   token?: { scopes: readonly string[]; spendCeilingMinor: number; bidCeilingMinor: number; expiresAt: string };
 }
@@ -38,8 +37,8 @@ export function createCampaignHandler(runtime: CampaignRuntime = campaignRuntime
       const current = await runtime.campaigns.get(campaignId);
       if (current.accountId !== accountId) return response(404, { error: "campaign_not_found" });
       if (body.action === "fund") {
-        if (!body.approval || body.amountMinor === undefined) return response(403, { error: "verified_human_funding_approval_required" });
-        return response(200, { campaign: await runtime.campaigns.fund(campaignId, body.amountMinor, body.approval) });
+        if (!body.approval) return response(403, { error: "verified_human_funding_approval_required" });
+        return response(200, { campaign: await runtime.campaigns.fund(campaignId, body.approval) });
       }
       if (body.action === "activate") {
         if (!body.approval) return response(403, { error: "verified_human_activation_approval_required" });

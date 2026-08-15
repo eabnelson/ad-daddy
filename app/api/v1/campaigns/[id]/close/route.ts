@@ -1,10 +1,11 @@
 import type { CampaignApproval } from "@ad-daddy/cli/campaign";
 import { campaignRuntime, type CampaignRuntime } from "../../../../../../lib/marketplace/campaign-registry.ts";
 import { PAYMENT_REQUEST_LIMITS, parseBoundedJson, RequestLimitError } from "../../../../../../lib/http/request-limits.ts";
-import { paymentRuntime, type PaymentRuntime } from "../../../../../../lib/payments/runtime.ts";
+import { getPaymentRuntime, type PaymentRuntime } from "../../../../../../lib/payments/runtime.ts";
 
-export function createCloseCampaignHandler(campaigns: CampaignRuntime = campaignRuntime, payments: PaymentRuntime = paymentRuntime) {
+export function createCloseCampaignHandler(campaigns: CampaignRuntime = campaignRuntime, injectedPayments?: PaymentRuntime) {
   return async function handle(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
+    const payments = injectedPayments ?? await getPaymentRuntime();
     const accountId = request.headers.get("oai-authenticated-user-id");
     if (!accountId) return json(401, { error: "human_authentication_required" });
     const { id } = await context.params;
@@ -18,7 +19,6 @@ export function createCloseCampaignHandler(campaigns: CampaignRuntime = campaign
       if (campaign.accountId !== accountId) return json(404, { error: "campaign_not_found" });
       const closed = await campaigns.campaigns.close(id, approval);
       const budget = campaigns.budgets.snapshot(id);
-      payments.closedCampaigns.set(id, budget);
       return json(200, { ...closed, budget });
     } catch (error) { return json(409, { error: "campaign_close_rejected", message: boundedError(error) }); }
   };

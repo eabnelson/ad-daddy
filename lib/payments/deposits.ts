@@ -1,6 +1,7 @@
 import { KeyedSerialExecutor } from "../runtime/keyed-serial.ts";
 import { LedgerService } from "./ledger.ts";
 import { assertPaymentPolicy, type PaymentPolicyContext } from "./payment-policy.ts";
+import { InMemoryPaymentStateRepository, type PaymentStateRepository } from "./repository.ts";
 import { validateTempoAddress, validateTempoMemo, type TempoTransferEvent } from "./tempo-client.ts";
 
 export interface DepositCommitment {
@@ -18,9 +19,11 @@ export interface DepositRecord {
   depositId: string;
   commitmentId?: string;
   campaignId?: string;
+  advertiserAccountId?: string;
   eventKey: string;
   memo: string;
   amountMinor: number;
+  tokenAddress: string;
   status: "credited" | "quarantined" | "reorged";
   reason?: string;
   transactionHash: string;
@@ -29,51 +32,50 @@ export interface DepositRecord {
 }
 
 export class DepositService {
-  readonly #commitments = new Map<string, DepositCommitment>();
-  readonly #records = new Map<string, DepositRecord>();
-  readonly #memoEvents = new Map<string, string>();
   readonly #serial = new KeyedSerialExecutor();
   readonly #ledger: LedgerService;
   readonly #policy: PaymentPolicyContext;
   readonly #treasuryAddress: string;
+  readonly #repository: PaymentStateRepository;
 
   constructor(
     ledger: LedgerService,
     policy: PaymentPolicyContext,
     treasuryAddress: string,
+    repository: PaymentStateRepository = new InMemoryPaymentStateRepository(),
   ) {
     validateTempoAddress(treasuryAddress);
     this.#ledger = ledger;
     this.#policy = policy;
     this.#treasuryAddress = treasuryAddress;
+    this.#repository = repository;
   }
 
-  register(input: DepositCommitment): DepositCommitment {
+  async register(input: DepositCommitment): Promise<DepositCommitment> {
     validateTempoMemo(input.memo);
     assertPositive(input.amountMinor);
     if (input.expectedSender) validateTempoAddress(input.expectedSender);
-    const existing = this.#commitments.get(input.memo.toLowerCase());
+    const existing = await this.#repository.getDepositCommitment(input.memo);
     if (existing && fingerprint(existing) !== fingerprint(input)) throw new Error("Deposit memo commitment collision");
-    if (!existing) this.#commitments.set(input.memo.toLowerCase(), structuredClone(input));
-    return structuredClone(existing ?? input);
+    return this.#repository.putDepositCommitment(input);
   }
 
-  process(event: TempoTransferEvent): Promise<DepositRecord> {
+  async process(event: TempoTransferEvent): Promise<DepositRecord> {
     const eventKey = `${event.chainId}:${event.transactionHash.toLowerCase()}:${event.logIndex}`;
-    return this.#serial.run(eventKey, async () => {
-      assertEvent(event);
-      assertPaymentPolicy({ ...this.#policy, chainId: event.chainId, tokenAddress: event.tokenAddress });
-      const existing = this.#records.get(eventKey);
+    assertEvent(event);
+    assertPaymentPolicy({ ...this.#policy, chainId: event.chainId, tokenAddress: event.tokenAddress });
+    const knownCommitment = await this.#repository.getDepositCommitment(event.memo);
+    const serialKey = knownCommitment ? `campaign:${knownCommitment.campaignId}` : `event:${eventKey}`;
+    return this.#serial.run(serialKey, async () => {
+      const existing = await this.#repository.getDepositRecord(eventKey);
       if (existing && existing.status === "reorged") return structuredClone(existing);
-      const commitment = this.#commitments.get(event.memo.toLowerCase());
+      const commitment = await this.#repository.getDepositCommitment(event.memo);
       if (!commitment) return this.store(eventKey, event, "quarantined", "unknown_memo");
-      const priorEventKey = this.#memoEvents.get(event.memo.toLowerCase());
-      if (priorEventKey && priorEventKey !== eventKey) return this.store(eventKey, event, "quarantined", "memo_replay");
+      const priorEvent = await this.#repository.getDepositRecordByMemo(event.memo);
+      if (priorEvent && priorEvent.eventKey !== eventKey) return this.store(eventKey, event, "quarantined", "memo_replay");
       if (event.to.toLowerCase() !== this.#treasuryAddress.toLowerCase()) return this.store(eventKey, event, "quarantined", "wrong_treasury");
       if (commitment.expectedSender && event.from.toLowerCase() !== commitment.expectedSender.toLowerCase()) return this.store(eventKey, event, "quarantined", "wrong_sender");
       if (event.amountMinor !== commitment.amountMinor) return this.store(eventKey, event, "quarantined", "wrong_amount");
-      this.#memoEvents.set(event.memo.toLowerCase(), eventKey);
-
       if (event.status === "reorged") {
         if (existing?.status === "credited") {
           await this.#ledger.post({
@@ -108,21 +110,39 @@ export class DepositService {
     });
   }
 
-  private store(eventKey: string, event: TempoTransferEvent, status: DepositRecord["status"], reason?: string, commitment?: DepositCommitment) {
+  async requireCreditedCampaignDeposit(input: { campaignId: string; advertiserAccountId: string; amountMinor: number }): Promise<{ depositId: string }> {
+    return this.#findCreditedCampaignDeposit(input);
+  }
+
+  withCreditedCampaignDeposit<T>(input: { campaignId: string; advertiserAccountId: string; amountMinor: number }, action: () => Promise<T>): Promise<T> {
+    return this.#serial.run(`campaign:${input.campaignId}`, async () => {
+      await this.#findCreditedCampaignDeposit(input);
+      return action();
+    });
+  }
+
+  async #findCreditedCampaignDeposit(input: { campaignId: string; advertiserAccountId: string; amountMinor: number }): Promise<{ depositId: string }> {
+    const match = await this.#repository.findCreditedCampaignDeposit({ ...input, tokenAddress: this.#policy.tokenAddress });
+    if (!match) throw new Error("A credited, unreorged deposit for this account, campaign, asset, and exact maximum spend is required");
+    return { depositId: match.depositId };
+  }
+
+  private async store(eventKey: string, event: TempoTransferEvent, status: DepositRecord["status"], reason?: string, commitment?: DepositCommitment) {
     const record: DepositRecord = Object.freeze({
       depositId: `deposit:${eventKey}`,
       ...(commitment ? { commitmentId: commitment.commitmentId, campaignId: commitment.campaignId } : {}),
+      ...(commitment ? { advertiserAccountId: commitment.advertiserAccountId } : {}),
       eventKey,
       memo: event.memo,
       amountMinor: event.amountMinor,
+      tokenAddress: event.tokenAddress,
       status,
       ...(reason ? { reason } : {}),
       transactionHash: event.transactionHash,
       logIndex: event.logIndex,
       policyVersion: this.#policy.policyVersion,
     });
-    this.#records.set(eventKey, record);
-    return structuredClone(record);
+    return this.#repository.putDepositRecord(record);
   }
 }
 

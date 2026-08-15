@@ -6,6 +6,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "no_bundle": true,
+  "vars": {
+    "AD_DADDY_ENV": "test"
+  },
   "assets": {
     "directory": "./dist/client"
   },
@@ -13,7 +16,8 @@
     {
       "binding": "DB",
       "database_name": "ad-daddy-local",
-      "database_id": "00000000-0000-4000-8000-000000000001"
+      "database_id": "00000000-0000-4000-8000-000000000001",
+      "migrations_dir": "drizzle"
     }
   ],
   "services": [
@@ -25,11 +29,15 @@
   "env": {
     "staging": {
       "name": "ad-daddy-app-staging",
+      "vars": {
+        "AD_DADDY_ENV": "staging"
+      },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "ad-daddy-staging",
-          "database_id": "00000000-0000-4000-8000-000000000002"
+          "database_id": "00000000-0000-4000-8000-000000000002",
+          "migrations_dir": "drizzle"
         }
       ],
       "services": [
@@ -41,11 +49,15 @@
     },
     "production": {
       "name": "ad-daddy-app-production",
+      "vars": {
+        "AD_DADDY_ENV": "production"
+      },
       "d1_databases": [
         {
           "binding": "DB",
           "database_name": "ad-daddy-production",
-          "database_id": "00000000-0000-4000-8000-000000000003"
+          "database_id": "00000000-0000-4000-8000-000000000003",
+          "migrations_dir": "drizzle"
         }
       ],
       "services": [

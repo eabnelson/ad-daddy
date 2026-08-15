@@ -467,6 +467,8 @@ export const depositCommitments = sqliteTable("deposit_commitments", {
   id: text("id").primaryKey(),
   campaignId: text("campaign_id").notNull().references(() => campaigns.id),
   advertiserAccountId: text("advertiser_account_id").notNull().references(() => humanAccounts.id),
+  advertiserLedgerAccountId: text("advertiser_ledger_account_id").notNull(),
+  treasuryLedgerAccountId: text("treasury_ledger_account_id").notNull(),
   opaqueMemo: text("opaque_memo").notNull(),
   amountMinor: integer("amount_minor").notNull(),
   expectedSender: text("expected_sender"),
@@ -529,12 +531,17 @@ export const payoutDestinations = sqliteTable("payout_destinations", {
 export const payoutRecords = sqliteTable("payout_records", {
   id: text("id").primaryKey(),
   accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  receiverLedgerAccountId: text("receiver_ledger_account_id").notNull(),
+  treasuryLedgerAccountId: text("treasury_ledger_account_id").notNull(),
   destinationId: text("destination_id").notNull().references(() => payoutDestinations.id),
+  destinationAddress: text("destination_address").notNull(),
   amountMinor: integer("amount_minor").notNull(),
   opaqueMemo: text("opaque_memo").notNull(),
   status: text("status", { enum: ["queued", "failed", "paid"] }).notNull(),
   transactionHash: text("transaction_hash"),
+  failureReason: text("failure_reason"),
   policyVersion: text("policy_version").notNull(),
+  queuedAt: text("queued_at").notNull(),
   createdAt: createdAt(),
   paidAt: text("paid_at"),
 }, (table) => [
@@ -545,6 +552,10 @@ export const payoutRecords = sqliteTable("payout_records", {
 export const refundRecords = sqliteTable("refund_records", {
   id: text("id").primaryKey(),
   campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  approvalId: text("approval_id").notNull(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  advertiserLedgerAccountId: text("advertiser_ledger_account_id").notNull(),
+  treasuryLedgerAccountId: text("treasury_ledger_account_id").notNull(),
   amountMinor: integer("amount_minor").notNull(),
   address: text("address").notNull(),
   opaqueMemo: text("opaque_memo").notNull(),
@@ -552,12 +563,44 @@ export const refundRecords = sqliteTable("refund_records", {
   heldMinor: integer("held_minor").notNull(),
   status: text("status", { enum: ["pending", "failed", "paid"] }).notNull(),
   transactionHash: text("transaction_hash"),
+  failureReason: text("failure_reason"),
   policyVersion: text("policy_version").notNull(),
   createdAt: createdAt(),
   paidAt: text("paid_at"),
 }, (table) => [
   uniqueIndex("refund_record_memo_unique").on(table.opaqueMemo),
+  uniqueIndex("refund_record_campaign_unique").on(table.campaignId),
   check("refund_record_amounts_nonnegative", sql`${table.amountMinor} > 0 AND ${table.reservedMinor} >= 0 AND ${table.heldMinor} >= 0`),
+]);
+
+export const refundHumanProofs = sqliteTable("refund_human_proofs", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  nonce: text("nonce").notNull(),
+  method: text("method", { enum: ["passkey_and_wallet_signature"] }).notNull(),
+  verifiedAt: text("verified_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  consumedByApprovalId: text("consumed_by_approval_id"),
+  consumedAt: text("consumed_at"),
+  createdAt: createdAt(),
+}, (table) => [uniqueIndex("refund_human_proof_nonce_unique").on(table.nonce)]);
+
+export const refundApprovalRecords = sqliteTable("refund_approval_records", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  refundAddress: text("refund_address").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  proofId: text("proof_id").notNull().references(() => refundHumanProofs.id),
+  nonce: text("nonce").notNull(),
+  approvedAt: text("approved_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  consumedByRefundId: text("consumed_by_refund_id"),
+  consumedAt: text("consumed_at"),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("refund_approval_proof_unique").on(table.proofId),
+  check("refund_approval_amount_positive", sql`${table.amountMinor} > 0`),
 ]);
 
 export const launchPolicies = sqliteTable("launch_policies", {

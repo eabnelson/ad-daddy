@@ -14,6 +14,7 @@ export class LedgerInvariantError extends Error {
 
 export interface LedgerRepository {
   commit(transaction: LedgerTransaction): Promise<LedgerTransaction>;
+  list(): Promise<readonly LedgerTransaction[]>;
 }
 
 function canonicalJson(value: unknown): string {
@@ -108,6 +109,10 @@ export class InMemoryLedgerRepository implements LedgerRepository {
     this.#byTransactionId.set(transaction.transactionId, transaction);
     this.transactions.push(transaction);
     return transaction;
+  }
+
+  async list(): Promise<readonly LedgerTransaction[]> {
+    return structuredClone(this.transactions);
   }
 }
 
