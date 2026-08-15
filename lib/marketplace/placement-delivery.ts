@@ -38,18 +38,34 @@ export interface PlacementDeliveryRecord {
   receipt?: CodexDeliveryReceipt | GenericPlacementReceipt;
   lastFailureCode?: string;
   receiverAction?: PlacementReceiverAction;
+  marketContext?: {
+    campaignId: string;
+    eligibleBidderCount: number;
+    rewardType: "stablecoin" | "credits" | "discount";
+    grossAmountMinor: number;
+    receiverAmountMinor: number;
+    operatorAmountMinor: number;
+  };
   updatedAt: string;
 }
 
 export interface PlacementDeliveryRepository {
   get(placementId: string): Promise<PlacementDeliveryRecord | undefined>;
   put(record: PlacementDeliveryRecord): Promise<void>;
+  listByReceiver(receiverAccountId: string): Promise<readonly PlacementDeliveryRecord[]>;
+  listByAdvertiser(advertiserId: string): Promise<readonly PlacementDeliveryRecord[]>;
 }
 
 export class MemoryPlacementDeliveryRepository implements PlacementDeliveryRepository {
   readonly #records = new Map<string, PlacementDeliveryRecord>();
   async get(placementId: string) { return clone(this.#records.get(placementId)); }
   async put(record: PlacementDeliveryRecord) { this.#records.set(record.placementId, clone(record)!); }
+  async listByReceiver(receiverAccountId: string) {
+    return [...this.#records.values()].filter((record) => record.receiverAccountId === receiverAccountId).map((record) => clone(record)!);
+  }
+  async listByAdvertiser(advertiserId: string) {
+    return [...this.#records.values()].filter((record) => record.validatedCreative.payload.advertiser.id === advertiserId).map((record) => clone(record)!);
+  }
 }
 
 export class PlacementDeliveryService {
@@ -57,20 +73,24 @@ export class PlacementDeliveryService {
   readonly #repository: PlacementDeliveryRepository;
   readonly #signingKeys: MarketplaceSigningKeys;
   readonly #creativePolicy: CreativeValidationPolicy;
+  readonly #advertiserPolicy?: { assertAllowed(receiverAccountId: string, advertiserId: string): void };
 
   constructor(
     repository: PlacementDeliveryRepository,
     signingKeys: MarketplaceSigningKeys,
     creativePolicy: CreativeValidationPolicy,
+    advertiserPolicy?: { assertAllowed(receiverAccountId: string, advertiserId: string): void },
   ) {
     this.#repository = repository;
     this.#signingKeys = signingKeys;
     this.#creativePolicy = creativePolicy;
+    this.#advertiserPolicy = advertiserPolicy;
   }
 
   async prepare(input: {
     receiverAccountId: string;
     placement: SignedPlacement;
+    marketContext?: PlacementDeliveryRecord["marketContext"];
     now?: Date;
   }): Promise<PlacementDeliveryRecord> {
     const now = input.now ?? new Date();
@@ -78,18 +98,21 @@ export class PlacementDeliveryService {
       const existing = await this.#repository.get(input.placement.payload.placementId);
       if (existing) {
         if (existing.receiverAccountId !== input.receiverAccountId ||
-          fingerprint(existing.signedPlacement) !== fingerprint(input.placement)) {
+          fingerprint(existing.signedPlacement) !== fingerprint(input.placement) ||
+          fingerprint(existing.marketContext) !== fingerprint(input.marketContext)) {
           throw new Error("Placement idempotency collision");
         }
         return existing;
       }
       const verified = this.#signingKeys.verifyWithKey(input.placement, now);
+      this.#advertiserPolicy?.assertAllowed(input.receiverAccountId, verified.payload.advertiser.id);
       const validatedCreative = validateCreative(verified.payload, this.#creativePolicy);
       const record: PlacementDeliveryRecord = {
         placementId: verified.payload.placementId,
         receiverAccountId: input.receiverAccountId,
         signedPlacement: input.placement,
         validatedCreative,
+        ...(input.marketContext ? { marketContext: validateMarketContext(input.marketContext, verified.payload.payout.amountMinor) } : {}),
         status: "ready",
         updatedAt: now.toISOString(),
       };
@@ -200,3 +223,12 @@ export class PlacementDeliveryService {
 
 function fingerprint(value: unknown): string { return JSON.stringify(value); }
 function clone<T>(value: T | undefined): T | undefined { return value === undefined ? undefined : structuredClone(value); }
+
+function validateMarketContext(context: NonNullable<PlacementDeliveryRecord["marketContext"]>, displayedReceiverMinor: number) {
+  if (!context.campaignId || context.campaignId.length > 128 || !Number.isSafeInteger(context.eligibleBidderCount) || context.eligibleBidderCount < 1 ||
+    ![context.grossAmountMinor, context.receiverAmountMinor, context.operatorAmountMinor].every((amount) => Number.isSafeInteger(amount) && amount >= 0) ||
+    context.receiverAmountMinor + context.operatorAmountMinor !== context.grossAmountMinor || context.receiverAmountMinor !== displayedReceiverMinor ||
+    !["stablecoin", "credits", "discount"].includes(context.rewardType)) throw new Error("Placement market context is invalid");
+  if (context.rewardType !== "stablecoin" && context.grossAmountMinor !== 0) throw new Error("Non-cash market context cannot enter cash economics");
+  return structuredClone(context);
+}

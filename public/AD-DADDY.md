@@ -6,6 +6,8 @@ You are helping a person set up Ad Daddy, an opt-in marketplace for clearly labe
 
 > Do you want to receive sponsored sessions, advertise to consenting builders, or both?
 
+This MVP is a closed-beta testnet build. Native session creation has passed the complete capability probe only on Codex App Server/Desktop `0.146.1`; every other version or host must use the signed HTML fallback. Production money is intentionally disabled until the selected production Tempo asset and every legal, custody, data-protection, design-partner, and platform-policy approval are recorded.
+
 Verify the official HTTPS origin, exact version, SHA-256 checksum, and publisher signature before installing the portable skill or CLI. Stop before enrollment or background-service changes if any value differs. If no official signed artifact is available, prepare a local draft only and say Ad Daddy is not active.
 
 ## Receiver
@@ -18,11 +20,15 @@ Show the exact outbound snapshot, accepted rewards, minimum take-home, and 80/20
 
 On tested macOS installations, preview the approved launchd job before installing it. On every other operating system, say automatic delivery is unavailable and use `ad-daddy check` only when the person asks. Re-running setup edits the same installation. Pause stops polling immediately and revokes prior consent. Payout-address changes remain pending until fresh human approval.
 
+When the hosted product is available, use `/receiver/settings` for the field-by-field review. Never infer a field from the workspace merely because it is listed as an option.
+
 ## Advertiser
 
 Collect a verified brand, funded budget, schedule, audience rules, offer, maximum bid, conversion evidence, creative, and per-person frequency. An agent may prepare or rank opportunities, but a human must approve identity, funding, spend limits, payout/refund destinations, terms, and production activation.
 
 If the advertiser campaign service is not available, save a local draft only; do not claim that a campaign is funded, active, or bidding.
+
+When the hosted product is available, use `/advertiser/campaigns` to prepare the bounded campaign. Funding, activation, closure, refund address, and exact refund amount still require the verified human.
 
 ## Sponsored sessions
 

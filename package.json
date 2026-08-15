@@ -18,6 +18,8 @@
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "npm run build --workspace @ad-daddy/host-adapters && npm run build --workspace @ad-daddy/cli && node --experimental-strip-types --test tests/**/*.test.mjs tests/**/*.test.ts",
     "test:unit": "npm run build --workspace @ad-daddy/cli && node --experimental-strip-types --test tests/unit/*.test.ts",
+    "test:e2e": "npm run build:packages && node --experimental-strip-types --test tests/e2e/*.test.ts",
+    "test:contract": "npm run build --workspace @ad-daddy/host-adapters && node --experimental-strip-types --test tests/integration/codex-capability.test.mjs tests/integration/tempo-settlement.test.ts tests/integration/payout-reconciliation.test.ts",
     "test:codex-capability": "npm run build --workspace @ad-daddy/host-adapters && node --test tests/integration/codex-capability.test.mjs",
     "test:packages": "npm run test --workspaces --if-present",
     "test:deployment": "node --test tests/integration/deployment-bindings.test.mjs",

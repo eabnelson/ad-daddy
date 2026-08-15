@@ -4,5 +4,6 @@ export {
   deliverCodexPlacement,
   type CodexDeliveryReceipt,
   type CodexDeliveryResult,
+  type CodexAppServerConnection,
   type DeliverCodexPlacementOptions,
 } from "./codex-app-server.js";

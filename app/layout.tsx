@@ -14,9 +14,8 @@ const mono = Space_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ad Daddy — Your agent. Your attention. Your terms.",
-  description:
-    "An open, user-controlled ad marketplace for AI agents. Set your price, pace, privacy, and categories.",
+  title: "Ad Daddy",
+  description: "Tell your agent to get setup with Ad Daddy and start earning before you build.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

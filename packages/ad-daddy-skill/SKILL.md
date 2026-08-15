@@ -7,6 +7,8 @@ description: Set up and operate Ad Daddy for people who want to receive clearly 
 
 Keep setup conversational and brief. Say that Ad Daddy is an opt-in sponsored-session marketplace. Never claim installation, automatic delivery, payments, or production access succeeded without verified CLI output.
 
+The MVP is closed-beta and testnet-only. Native session creation is allowlisted only for a host version that passed the complete sidebar probe; otherwise use the signed HTML fallback. Do not enable production funds without the recorded platform, legal, custody, data-protection, design-partner, and payment-policy gates.
+
 ## Set up
 
 1. Read [references/setup.md](references/setup.md).

@@ -7,11 +7,15 @@ import type {
   PlacementDeliveryRepository,
   PlacementReceiverAction,
 } from "../../../../../../lib/marketplace/placement-delivery.ts";
+import { placementBlocklist, type PlacementBlocklist } from "../../../../../../lib/marketplace/blocking.ts";
+import { lifecycleEvents, type LifecycleEventStore } from "../../../../../../lib/observability/events.ts";
 
 const RECEIPT_LIMITS = { maxBytes: 4_096, maxDepth: 3, maxCollectionItems: 8, maxStringLength: 128 } as const;
 
 export function createPlacementReceiptHandler(
   repository: PlacementDeliveryRepository = placementDeliveryRepository,
+  blocklist: PlacementBlocklist = placementBlocklist,
+  events: LifecycleEventStore = lifecycleEvents,
 ) {
   return async function handle(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
     const accountId = request.headers.get("oai-authenticated-user-id");
@@ -37,6 +41,13 @@ export function createPlacementReceiptHandler(
         receiverAction: body.action,
         updatedAt: new Date().toISOString(),
       };
+      if (body.action === "block_advertiser") {
+        blocklist.block(accountId, record.validatedCreative.payload.advertiser.id);
+        events.record({ eventId: `block:${id}`, type: "advertiser_blocked", occurredAt: updated.updatedAt, receiverAccountId: accountId, advertiserId: record.validatedCreative.payload.advertiser.id, placementId: id });
+      }
+      if (body.action === "report") {
+        events.record({ eventId: `report:${id}`, type: "placement_reported", occurredAt: updated.updatedAt, receiverAccountId: accountId, advertiserId: record.validatedCreative.payload.advertiser.id, placementId: id });
+      }
       await repository.put(updated);
       return json(200, publicReceipt(updated));
     } catch (error) {
