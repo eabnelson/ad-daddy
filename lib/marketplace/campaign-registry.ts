@@ -1,0 +1,24 @@
+import { CampaignTokenService } from "../auth/campaign-token.ts";
+import { FixedWindowRateLimiter } from "../http/rate-limit.ts";
+import { CampaignService, MemoryCampaignRepository, type OpportunityCandidate } from "../../packages/cli/src/commands/campaign.ts";
+import { CampaignBudgetService } from "./budget.ts";
+
+const budgets = new CampaignBudgetService();
+const campaigns = new CampaignService(new MemoryCampaignRepository(), budgets);
+const tokens = new CampaignTokenService(`runtime-${crypto.randomUUID()}-${crypto.randomUUID()}`);
+
+export const campaignRuntime = Object.freeze({
+  budgets,
+  campaigns,
+  tokens,
+  campaignRateLimit: new FixedWindowRateLimiter({ limit: 30, windowMs: 60_000, maxRetryAfterSeconds: 60 }),
+  opportunityRateLimit: new FixedWindowRateLimiter({ limit: 60, windowMs: 60_000, maxRetryAfterSeconds: 60 }),
+  async listCandidates(campaignId: string): Promise<readonly OpportunityCandidate[]> {
+    void campaignId;
+    // D1-backed inventory is attached at the API boundary in deployment. Empty
+    // inventory fails closed instead of exposing profile records directly.
+    return [];
+  },
+});
+
+export type CampaignRuntime = typeof campaignRuntime;

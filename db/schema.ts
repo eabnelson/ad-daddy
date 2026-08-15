@@ -153,6 +153,105 @@ export const profileSnapshots = sqliteTable("profile_snapshots", {
   index("profile_snapshot_expiry_idx").on(table.expiresAt),
 ]);
 
+export const advertiserBrands = sqliteTable("advertiser_brands", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  name: text("name").notNull(),
+  verifiedDomain: text("verified_domain").notNull(),
+  ownershipStatus: text("ownership_status", { enum: ["pending", "verified", "revoked"] }).notNull().default("pending"),
+  verifiedAt: text("verified_at"),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("advertiser_brand_domain_unique").on(table.verifiedDomain),
+  index("advertiser_brand_account_idx").on(table.accountId),
+]);
+
+export const advertiserTermsAcceptances = sqliteTable("advertiser_terms_acceptances", {
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  version: text("version").notNull(),
+  acceptedAt: text("accepted_at").notNull(),
+  approvalId: text("approval_id").notNull(),
+}, (table) => [primaryKey({ columns: [table.accountId, table.version] })]);
+
+export const campaigns = sqliteTable("campaigns", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  brandId: text("brand_id").notNull().references(() => advertiserBrands.id),
+  status: text("status", { enum: ["draft", "funding_pending", "active", "paused", "closed"] }).notNull().default("draft"),
+  advertiserTermsVersion: text("advertiser_terms_version").notNull(),
+  destinationUrl: text("destination_url").notNull(),
+  scheduleStartsAt: text("schedule_starts_at").notNull(),
+  scheduleEndsAt: text("schedule_ends_at").notNull(),
+  audienceJson: text("audience_json").notNull(),
+  offerJson: text("offer_json").notNull(),
+  creativeJson: text("creative_json").notNull(),
+  conversionTerms: text("conversion_terms").notNull(),
+  maximumSpendMinor: integer("maximum_spend_minor").notNull(),
+  maximumBidMinor: integer("maximum_bid_minor").notNull(),
+  dailyCapMinor: integer("daily_cap_minor").notNull(),
+  fundedMinor: integer("funded_minor").notNull().default(0),
+  spentMinor: integer("spent_minor").notNull().default(0),
+  activatedAt: text("activated_at"),
+  closedAt: text("closed_at"),
+  createdAt: createdAt(),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("campaign_account_status_idx").on(table.accountId, table.status),
+  check("campaign_amounts_nonnegative", sql`${table.maximumSpendMinor} >= 0 AND ${table.maximumBidMinor} >= 0 AND ${table.dailyCapMinor} >= 0 AND ${table.fundedMinor} >= 0 AND ${table.spentMinor} >= 0`),
+  check("campaign_bid_within_spend", sql`${table.maximumBidMinor} <= ${table.maximumSpendMinor}`),
+  check("campaign_daily_within_spend", sql`${table.dailyCapMinor} <= ${table.maximumSpendMinor}`),
+  check("campaign_spend_within_funds", sql`${table.spentMinor} <= ${table.fundedMinor}`),
+]);
+
+export const campaignBudgetReservations = sqliteTable("campaign_budget_reservations", {
+  id: text("id").primaryKey(),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  idempotencyKey: text("idempotency_key").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  budgetDay: text("budget_day").notNull(),
+  status: text("status", { enum: ["reserved", "released", "committed"] }).notNull(),
+  createdAt: createdAt(),
+  releasedAt: text("released_at"),
+  committedAt: text("committed_at"),
+}, (table) => [
+  uniqueIndex("campaign_reservation_idempotency_unique").on(table.campaignId, table.idempotencyKey),
+  index("campaign_reservation_budget_idx").on(table.campaignId, table.budgetDay, table.status),
+  check("campaign_reservation_amount_positive", sql`${table.amountMinor} > 0`),
+]);
+
+export const campaignBudgetHolds = sqliteTable("campaign_budget_holds", {
+  id: text("id").primaryKey(),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  reason: text("reason").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  status: text("status", { enum: ["active", "released"] }).notNull(),
+  createdAt: createdAt(),
+  releasedAt: text("released_at"),
+}, (table) => [
+  index("campaign_hold_status_idx").on(table.campaignId, table.status),
+  check("campaign_hold_amount_positive", sql`${table.amountMinor} > 0`),
+]);
+
+export const campaignAgentTokens = sqliteTable("campaign_agent_tokens", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  tokenHash: text("token_hash").notNull(),
+  scopesJson: text("scopes_json").notNull(),
+  spendCeilingMinor: integer("spend_ceiling_minor").notNull(),
+  spentMinor: integer("spent_minor").notNull().default(0),
+  bidCeilingMinor: integer("bid_ceiling_minor").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  revokedAt: text("revoked_at"),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("campaign_agent_token_hash_unique").on(table.tokenHash),
+  index("campaign_agent_token_campaign_expiry_idx").on(table.campaignId, table.expiresAt),
+  check("campaign_agent_token_ceilings_nonnegative", sql`${table.spendCeilingMinor} >= 0 AND ${table.spentMinor} >= 0 AND ${table.bidCeilingMinor} >= 0`),
+  check("campaign_agent_token_bid_within_spend", sql`${table.bidCeilingMinor} <= ${table.spendCeilingMinor}`),
+  check("campaign_agent_token_spent_within_ceiling", sql`${table.spentMinor} <= ${table.spendCeilingMinor}`),
+]);
+
 export const revenueSplitVersions = sqliteTable("revenue_split_versions", {
   version: text("version").primaryKey(),
   receiverBasisPoints: integer("receiver_basis_points").notNull(),
