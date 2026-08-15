@@ -1,0 +1,1 @@
+CREATE INDEX `campaign_reservation_status_idx` ON `campaign_budget_reservations` (`campaign_id`,`status`);

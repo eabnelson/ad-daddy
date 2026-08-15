@@ -216,6 +216,7 @@ export const campaignBudgetReservations = sqliteTable("campaign_budget_reservati
 }, (table) => [
   uniqueIndex("campaign_reservation_idempotency_unique").on(table.campaignId, table.idempotencyKey),
   index("campaign_reservation_budget_idx").on(table.campaignId, table.budgetDay, table.status),
+  index("campaign_reservation_status_idx").on(table.campaignId, table.status),
   check("campaign_reservation_amount_positive", sql`${table.amountMinor} > 0`),
 ]);
 

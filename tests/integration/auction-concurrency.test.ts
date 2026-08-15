@@ -107,6 +107,62 @@ test("durable auction storage survives object restart and its receiver view omit
   assert.equal(JSON.stringify(visible).includes("private_bid"), false);
 });
 
+test("an alarm clearing an auction is serialized behind an in-flight bid", async () => {
+  const closesAt = new Date(Date.now() + 40).toISOString();
+  const submittedAt = new Date(Date.now() - 1_000).toISOString();
+  const values = new Map<string, unknown>();
+  let releaseBidPersistence!: () => void;
+  let bidPersistenceStarted!: () => void;
+  const bidPersistenceGate = new Promise<void>((resolve) => { releaseBidPersistence = resolve; });
+  const bidPersistenceSignal = new Promise<void>((resolve) => { bidPersistenceStarted = resolve; });
+  const state = {
+    storage: {
+      get: async <T>(key: string) => structuredClone(values.get(key)) as T | undefined,
+      put: async <T>(key: string, value: T) => { values.set(key, structuredClone(value)); },
+      setAlarm: async () => undefined,
+    },
+  };
+  const db = {
+    prepare(query: string) {
+      return {
+        bind() { return this; },
+        async run() {
+          if (query.includes("INSERT INTO auction_bids")) {
+            bidPersistenceStarted();
+            await bidPersistenceGate;
+          }
+          return { meta: { changes: 1 } };
+        },
+        async first<T>() {
+          if (query.includes("FROM opportunities")) {
+            return { currentConsentVersion: 1, receiverStatus: "active", frequencyEligible: 1 } as T;
+          }
+          throw new Error(`Unexpected query: ${query}`);
+        },
+      };
+    },
+  };
+  const object = new AuctionObject(state, { DB: db } as never);
+  const definition = {
+    auctionId: "alarm_race", opportunityId: "opportunity", rewardLane: "credits" as const,
+    consentVersion: 1, minimumTakeHomeMinor: 0, matchedSignalNames: [], closesAt,
+  };
+  assert.equal((await object.fetch(jsonRequest("/auctions/alarm_race/open", definition))).status, 201);
+
+  const bid = object.fetch(jsonRequest("/auctions/alarm_race/bids", {
+    bidId: "late_persist", campaignId: "campaign", grossMinor: 0, rewardLane: "credits", submittedAt,
+  }));
+  await bidPersistenceSignal;
+  await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  const alarm = object.alarm();
+  releaseBidPersistence();
+  await Promise.all([bid, alarm]);
+
+  const stored = values.get("auction") as { bids: unknown[]; decision?: unknown };
+  assert.equal(stored.bids.length, 1);
+  assert.ok(stored.decision);
+});
+
 function jsonRequest(path: string, body: unknown) {
   return new Request(`https://auction.test${path}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),

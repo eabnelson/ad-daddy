@@ -29,7 +29,13 @@ export class AuctionObject {
     return operation;
   }
 
-  async alarm(): Promise<void> {
+  alarm(): Promise<void> {
+    const operation = this.#tail.then(() => this.runAlarm());
+    this.#tail = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async runAlarm(): Promise<void> {
     const stored = await this.#state.storage.get<StoredAuction>("auction");
     if (!stored || stored.decision) return;
     const status = await this.#env.DB.prepare(
@@ -103,7 +109,10 @@ export class AuctionObject {
     const service = this.serviceFor(stored);
     const decision = await service.clear(stored.definition.auctionId, { ...input, now: new Date(input.now) });
     await this.persistDecision(decision);
-    await this.#state.storage.put("auction", { ...stored, decision });
+    const latest = await this.#state.storage.get<StoredAuction>("auction");
+    if (!latest) throw new Error("Auction storage disappeared during clearance");
+    if (latest.decision) return latest.decision;
+    await this.#state.storage.put("auction", { ...latest, decision });
     return decision;
   }
 

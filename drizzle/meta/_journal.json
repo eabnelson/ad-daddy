@@ -50,6 +50,13 @@
       "when": 1786825568429,
       "tag": "0006_secret_wind_dancer",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786825867930,
+      "tag": "0007_orange_spectrum",
+      "breakpoints": true
     }
   ]
 }
