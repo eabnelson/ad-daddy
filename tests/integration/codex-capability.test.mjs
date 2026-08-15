@@ -31,6 +31,21 @@ test("accepts the valid signed inert placement fixture", () => {
   assert.match(placement.creative.body, /serverless Postgres/i);
 });
 
+test("validated placement data is detached and deeply immutable", () => {
+  const input = structuredClone(SIGNED_PLACEMENT_FIXTURE);
+  const placement = validateSignedPlacement(
+    input,
+    TEST_MARKETPLACE_PUBLIC_KEY_PEM,
+    NOW,
+  );
+
+  input.payload.creative.body = "mutated after verification";
+  assert.match(placement.creative.body, /serverless Postgres/i);
+  assert.throws(() => {
+    placement.creative.attachments[0].title = "mutated return value";
+  }, TypeError);
+});
+
 test("rejects a placement whose signed payload was modified", () => {
   const tampered = structuredClone(SIGNED_PLACEMENT_FIXTURE);
   tampered.payload.payout.amountMinor = 50_000;

@@ -105,8 +105,8 @@ function validateFields(input: unknown): ReceiverProfileFields {
   if (source.publicRepositoryUrls !== undefined) {
     const urls = stringArray(source.publicRepositoryUrls, "fields.publicRepositoryUrls", 256, 20);
     for (const [index, value] of urls.entries()) {
-      let url: URL;
-      try { url = new URL(value); } catch { throw new DomainValidationError("INVALID_URL", `fields.publicRepositoryUrls[${index}]`, "must be a URL"); }
+      const url = URL.parse(value);
+      if (!url) throw new DomainValidationError("INVALID_URL", `fields.publicRepositoryUrls[${index}]`, "must be a URL");
       if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password) {
         throw new DomainValidationError("INVALID_URL", `fields.publicRepositoryUrls[${index}]`, "must be a public HTTPS github.com URL");
       }

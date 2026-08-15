@@ -378,12 +378,17 @@ export async function deliverCodexPlacement(
 export interface SpawnCodexAppServerOptions {
   command?: string;
   clientVersion?: string;
+  requestTimeoutMs?: number;
 }
 
 export async function createCodexAppServerConnection(
   options: SpawnCodexAppServerOptions = {},
 ): Promise<CodexAppServerConnection> {
   const command = options.command ?? "codex";
+  const requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new Error("App Server request timeout must be a positive integer.");
+  }
   const child = spawn(
     command,
     [
@@ -395,18 +400,21 @@ export async function createCodexAppServerConnection(
     ],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
-  const rpc = new StdioRpcConnection(child);
-  const initialized = await rpc.request<{
-    userAgent?: string;
-    codexHome?: string;
-  }>("initialize", {
-    clientInfo: {
-      name: "ad_daddy",
-      title: "Ad Daddy sponsored display",
-      version: options.clientVersion ?? "0.1.0",
-    },
-    capabilities: null,
-  });
+  const rpc = new StdioRpcConnection(child, requestTimeoutMs);
+  let initialized: { userAgent?: string; codexHome?: string };
+  try {
+    initialized = await rpc.request<{ userAgent?: string; codexHome?: string }>("initialize", {
+      clientInfo: {
+        name: "ad_daddy",
+        title: "Ad Daddy sponsored display",
+        version: options.clientVersion ?? "0.1.0",
+      },
+      capabilities: null,
+    });
+  } catch (error) {
+    await rpc.close();
+    throw error;
+  }
   rpc.notify("initialized", {});
   const versionMatch = initialized.userAgent?.match(/(?:Codex Desktop|codex-cli)\/([^\s]+)/);
   return {
@@ -673,9 +681,14 @@ class StdioRpcConnection {
   }> = [];
   #stderr = "";
   #closed = false;
+  readonly #requestTimeoutMs: number;
 
-  constructor(child: ChildProcess) {
+  constructor(child: ChildProcess, requestTimeoutMs: number) {
+    if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
+      throw new Error("App Server request timeout must be a positive integer.");
+    }
     this.#child = child;
+    this.#requestTimeoutMs = requestTimeoutMs;
     const lines = createInterface({ input: child.stdout! });
     lines.on("line", (line) => this.#receive(line));
     child.stderr?.on("data", (chunk) => {
@@ -695,11 +708,27 @@ class StdioRpcConnection {
     this.request = <T>(method: string, params: unknown): Promise<T> => {
       const id = this.#nextId++;
       return new Promise<T>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          this.#pending.delete(id);
+          reject(new Error(`Codex App Server request timed out: ${method}`));
+        }, this.#requestTimeoutMs);
         this.#pending.set(id, {
-          resolve: (value) => resolve(value as T),
-          reject,
+          resolve: (value) => {
+            clearTimeout(timeout);
+            resolve(value as T);
+          },
+          reject: (reason) => {
+            clearTimeout(timeout);
+            reject(reason);
+          },
         });
-        this.#write({ id, method, params });
+        try {
+          this.#write({ id, method, params });
+        } catch (error) {
+          this.#pending.delete(id);
+          clearTimeout(timeout);
+          reject(error);
+        }
       });
     };
     this.notify = (method, params) => this.#write({ method, params });
@@ -736,6 +765,7 @@ class StdioRpcConnection {
     };
     this.close = async () => {
       this.#closed = true;
+      this.#failAll(new Error("Codex App Server connection closed."));
       child.stdin?.end();
       if (child.exitCode !== null || child.signalCode !== null) return;
       await new Promise<void>((resolve) => {
@@ -798,7 +828,12 @@ class StdioRpcConnection {
     }
     const waiter = this.#notificationWaiters.shift();
     if (waiter) waiter.resolve(notification);
-    else this.#notifications.push(notification);
+    else if (this.#notifications.length < 1_024) {
+      this.#notifications.push(notification);
+    } else {
+      this.#failAll(new Error("Codex App Server notification budget exceeded."));
+      this.#child.kill("SIGTERM");
+    }
   }
 
   #failAll(error: Error): void {
@@ -806,5 +841,6 @@ class StdioRpcConnection {
     this.#pending.clear();
     for (const waiter of this.#notificationWaiters) waiter.reject(error);
     this.#notificationWaiters = [];
+    this.#notifications = [];
   }
 }

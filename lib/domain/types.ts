@@ -1,4 +1,11 @@
-export type Environment = "test" | "development" | "staging" | "production";
+export const ENVIRONMENTS = [
+  "test",
+  "development",
+  "staging",
+  "production",
+] as const;
+
+export type Environment = (typeof ENVIRONMENTS)[number];
 
 export type RewardType = "stablecoin" | "credits" | "discount";
 
@@ -77,14 +84,17 @@ export interface OpportunityState {
   invalidatedReason?: "stale_consent" | "receiver_paused" | "receiver_revoked";
 }
 
-export type LedgerTransactionKind =
-  | "deposit"
-  | "budget_reservation"
-  | "reservation_release"
-  | "placement_settlement"
-  | "conversion_settlement"
-  | "refund"
-  | "payout";
+export const LEDGER_TRANSACTION_KINDS = [
+  "deposit",
+  "budget_reservation",
+  "reservation_release",
+  "placement_settlement",
+  "conversion_settlement",
+  "refund",
+  "payout",
+] as const;
+
+export type LedgerTransactionKind = (typeof LEDGER_TRANSACTION_KINDS)[number];
 
 export interface LedgerEntryInput {
   accountId: string;

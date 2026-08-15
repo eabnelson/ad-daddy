@@ -8,6 +8,12 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import { CREDENTIAL_KINDS } from "../lib/auth/credential-lifecycle";
+import {
+  ENVIRONMENTS,
+  LEDGER_TRANSACTION_KINDS,
+  PLACEMENT_STATES,
+} from "../lib/domain/types";
 
 const createdAt = () => text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`);
 
@@ -61,7 +67,6 @@ export const deviceEnrollmentGrants = sqliteTable("device_enrollment_grants", {
   createdAt: createdAt(),
 }, (table) => [
   uniqueIndex("device_enrollment_token_hash_unique").on(table.tokenHash),
-  uniqueIndex("device_enrollment_installation_unique").on(table.installationId),
 ]);
 
 export const installations = sqliteTable("installations", {
@@ -82,8 +87,8 @@ export const managedCredentials = sqliteTable("managed_credentials", {
   id: text("id").primaryKey(),
   accountId: text("account_id").references(() => humanAccounts.id),
   installationId: text("installation_id").references(() => installations.id),
-  kind: text("kind", { enum: ["installation", "campaign_agent", "marketplace_signing", "treasury_payment", "operator_admin", "integration"] }).notNull(),
-  environment: text("environment", { enum: ["test", "development", "staging", "production"] }).notNull(),
+  kind: text("kind", { enum: CREDENTIAL_KINDS }).notNull(),
+  environment: text("environment", { enum: ENVIRONMENTS }).notNull(),
   keyId: text("key_id").notNull(),
   scopesJson: text("scopes_json").notNull(),
   publicMaterial: text("public_material"),
@@ -181,7 +186,7 @@ export const placements = sqliteTable("placements", {
   opportunityId: text("opportunity_id").notNull().references(() => opportunities.id),
   consentVersion: integer("consent_version").notNull(),
   revenueSplitVersion: text("revenue_split_version").notNull().references(() => revenueSplitVersions.version),
-  state: text("state", { enum: ["offered", "bidding", "won", "delivered", "settled", "conversion_pending", "conversion_paid", "conversion_rejected", "no_fill", "expired"] }).notNull(),
+  state: text("state", { enum: PLACEMENT_STATES }).notNull(),
   idempotencyKey: text("idempotency_key").notNull(),
   grossAmountMinor: integer("gross_amount_minor").notNull(),
   receiverAmountMinor: integer("receiver_amount_minor").notNull(),
@@ -222,7 +227,7 @@ export const ledgerTransactions = sqliteTable("ledger_transactions", {
   id: text("id").primaryKey(),
   idempotencyKey: text("idempotency_key").notNull(),
   requestFingerprint: text("request_fingerprint").notNull(),
-  kind: text("kind", { enum: ["deposit", "budget_reservation", "reservation_release", "placement_settlement", "conversion_settlement", "refund", "payout"] }).notNull(),
+  kind: text("kind", { enum: LEDGER_TRANSACTION_KINDS }).notNull(),
   currency: text("currency").notNull(),
   referenceId: text("reference_id").notNull(),
   revenueSplitVersion: text("revenue_split_version").references(() => revenueSplitVersions.version),
@@ -275,7 +280,7 @@ export const outboxEvents = sqliteTable("outbox_events", {
 export const onchainTransfers = sqliteTable("onchain_transfers", {
   id: text("id").primaryKey(),
   ledgerTransactionId: text("ledger_transaction_id").notNull().references(() => ledgerTransactions.id),
-  environment: text("environment", { enum: ["test", "development", "staging", "production"] }).notNull(),
+  environment: text("environment", { enum: ENVIRONMENTS }).notNull(),
   chainId: text("chain_id").notNull(),
   transactionHash: text("transaction_hash"),
   logIndex: integer("log_index"),
@@ -290,7 +295,7 @@ export const onchainTransfers = sqliteTable("onchain_transfers", {
 ]);
 
 export const launchPolicies = sqliteTable("launch_policies", {
-  environment: text("environment", { enum: ["test", "development", "staging", "production"] }).notNull(),
+  environment: text("environment", { enum: ENVIRONMENTS }).notNull(),
   version: text("version").notNull(),
   policyJson: text("policy_json").notNull(),
   activatedAt: text("activated_at"),

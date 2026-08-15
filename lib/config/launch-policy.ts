@@ -1,4 +1,4 @@
-import type { Environment } from "../domain/types.ts";
+import { ENVIRONMENTS, type Environment } from "../domain/types.ts";
 
 export interface VersionedPolicyValue<T> {
   policyVersion: string;
@@ -124,7 +124,7 @@ export function validateLaunchPolicy(input: unknown): {
     if (!POLICY_KEYS.has(key)) throw new LaunchPolicyError(key, "is not a recognized launch policy field");
   }
   const environment = input.environment;
-  if (!new Set(["test", "development", "staging", "production"]).has(environment as string)) {
+  if (!ENVIRONMENTS.includes(environment as Environment)) {
     throw new LaunchPolicyError("environment", "is unsupported");
   }
   const version = input.version;

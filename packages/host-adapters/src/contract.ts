@@ -122,7 +122,7 @@ export function validateSignedPlacement(
     throw new PlacementValidationError("EXPIRED", "Placement has expired.");
   }
 
-  return placement.payload;
+  return deepFreeze(structuredClone(placement.payload));
 }
 
 function validatePayloadShape(placement: SignedPlacement): void {
@@ -189,9 +189,15 @@ function safeUrl(value: unknown): URL | null {
     return null;
   }
 
-  try {
-    return new URL(value);
-  } catch {
-    return null;
+  return URL.parse(value);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
   }
+  for (const nested of Object.values(value)) {
+    deepFreeze(nested);
+  }
+  return Object.freeze(value);
 }

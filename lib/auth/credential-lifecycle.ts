@@ -1,12 +1,15 @@
-import type { AuditEvent, Environment } from "../domain/types.ts";
+import { ENVIRONMENTS, type AuditEvent, type Environment } from "../domain/types.ts";
 
-export type CredentialKind =
-  | "installation"
-  | "campaign_agent"
-  | "marketplace_signing"
-  | "treasury_payment"
-  | "operator_admin"
-  | "integration";
+export const CREDENTIAL_KINDS = [
+  "installation",
+  "campaign_agent",
+  "marketplace_signing",
+  "treasury_payment",
+  "operator_admin",
+  "integration",
+] as const;
+
+export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 
 export interface ManagedCredential {
   credentialId: string;
@@ -29,16 +32,16 @@ export class CredentialLifecycleService {
   readonly #auditEvents: AuditEvent[] = [];
 
   get auditEvents(): readonly AuditEvent[] {
-    return Object.freeze(this.#auditEvents.map((event) => Object.freeze({ ...event })));
+    return Object.freeze([...this.#auditEvents]);
   }
 
   enroll(input: EnrollCredentialInput): ManagedCredential {
     const now = input.now ?? new Date();
     if (!input.credentialId || !input.keyId || !input.publicMaterial) throw new Error("Credential ID, key ID, and public material are required");
-    if (!new Set(["installation", "campaign_agent", "marketplace_signing", "treasury_payment", "operator_admin", "integration"]).has(input.kind)) {
+    if (!CREDENTIAL_KINDS.includes(input.kind)) {
       throw new Error("Unsupported credential kind");
     }
-    if (!new Set(["test", "development", "staging", "production"]).has(input.environment)) throw new Error("Unsupported credential environment");
+    if (!ENVIRONMENTS.includes(input.environment)) throw new Error("Unsupported credential environment");
     if (this.#byCredentialId.has(input.credentialId) || this.#byKeyId.has(input.keyId)) throw new Error("Credential or key ID already exists");
     if (input.scopes.length === 0 || input.scopes.length > 20 || new Set(input.scopes).size !== input.scopes.length || input.scopes.some((scope) => !scope || scope.length > 128)) {
       throw new Error("Credentials require 1-20 unique least-privilege scopes");

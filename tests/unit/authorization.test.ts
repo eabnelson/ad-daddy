@@ -144,6 +144,29 @@ test("one-time device enrollment cannot replay and revoked devices fail closed",
   );
 });
 
+test("an expired enrollment grant can be replaced for the same installation", () => {
+  const service = new DeviceEnrollmentService();
+  service.issueGrant({
+    grantId: "grant_expired",
+    accountId: "account_receiver",
+    installationId: "install_retry",
+    expiresAt: "2026-08-15T16:01:00.000Z",
+    approval: APPROVAL,
+    now: NOW,
+  });
+
+  assert.doesNotThrow(() =>
+    service.issueGrant({
+      grantId: "grant_replacement",
+      accountId: "account_receiver",
+      installationId: "install_retry",
+      expiresAt: "2026-08-15T16:05:00.000Z",
+      approval: APPROVAL,
+      now: new Date("2026-08-15T16:02:00.000Z"),
+    }),
+  );
+});
+
 test("environment-scoped credentials rotate with bounded overlap and revoke", () => {
   const service = new CredentialLifecycleService();
   service.enroll({

@@ -45,35 +45,35 @@ export class InMemoryOutbox implements OutboxStore {
     if (this.#events.has(input.eventId)) throw new Error(`Outbox event already exists: ${input.eventId}`);
     const event: OutboxEvent = {
       ...input,
-      payload: Object.freeze(structuredClone(input.payload)),
+      payload: cloneAndFreeze(input.payload),
       status: "pending",
       attempts: 0,
       createdAt: new Date().toISOString(),
     };
     this.#events.set(input.eventId, event);
     this.#idempotencyKeys.set(input.idempotencyKey, input.eventId);
-    return Object.freeze({ ...event });
+    return snapshot(event);
   }
 
   get(eventId: string): OutboxEvent | undefined {
     const event = this.#events.get(eventId);
-    return event ? Object.freeze({ ...event }) : undefined;
+    return event ? snapshot(event) : undefined;
   }
 
   recordAttempt(eventId: string): OutboxEvent {
     const event = this.require(eventId);
-    if (event.status === "delivered") return Object.freeze({ ...event });
+    if (event.status === "delivered") return snapshot(event);
     event.attempts += 1;
-    return Object.freeze({ ...event });
+    return snapshot(event);
   }
 
   markDelivered(eventId: string, receipt: Readonly<Record<string, unknown>>): OutboxEvent {
     const event = this.require(eventId);
-    if (event.status === "delivered") return Object.freeze({ ...event });
+    if (event.status === "delivered") return snapshot(event);
     event.status = "delivered";
     event.deliveredAt = new Date().toISOString();
-    event.deliveryReceipt = Object.freeze(structuredClone(receipt));
-    return Object.freeze({ ...event });
+    event.deliveryReceipt = cloneAndFreeze(receipt);
+    return snapshot(event);
   }
 
   private require(eventId: string): OutboxEvent {
@@ -94,6 +94,20 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function cloneAndFreeze<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+function snapshot(event: OutboxEvent): OutboxEvent {
+  return cloneAndFreeze(event);
+}
+
 export type OutboxHandler = (event: OutboxEvent) => Promise<Readonly<Record<string, unknown>>>;
 
 export class OutboxDispatcher {
@@ -110,11 +124,11 @@ export class OutboxDispatcher {
   }
 
   deliver(eventId: string): Promise<OutboxEvent> {
+    const inFlight = this.#inFlight.get(eventId);
+    if (inFlight) return inFlight;
     const existing = this.#store.get(eventId);
     if (!existing) return Promise.reject(new Error(`Unknown outbox event: ${eventId}`));
     if (existing.status === "delivered") return Promise.resolve(existing);
-    const inFlight = this.#inFlight.get(eventId);
-    if (inFlight) return inFlight;
 
     const delivery = this.attempt(eventId).finally(() => this.#inFlight.delete(eventId));
     this.#inFlight.set(eventId, delivery);

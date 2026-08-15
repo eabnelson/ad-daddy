@@ -44,7 +44,7 @@ export class AccountIdentityService {
   }
 
   get auditEvents(): readonly AuditEvent[] {
-    return Object.freeze(this.#auditEvents.map((event) => Object.freeze({ ...event })));
+    return Object.freeze([...this.#auditEvents]);
   }
 
   linkPlatformIdentity(accountId: string, identity: PlatformIdentity, approval: HumanApproval, now = new Date()): void {

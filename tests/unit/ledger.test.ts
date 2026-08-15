@@ -158,3 +158,25 @@ test("outbox idempotency collisions cannot alias a different event or payload", 
     /Idempotency key collision/,
   );
 });
+
+test("outbox snapshots cannot mutate stored nested payloads or receipts", () => {
+  const input = { placement: { id: "placement_1" } };
+  const outbox = new InMemoryOutbox();
+  const created = outbox.enqueue({
+    eventId: "event_nested",
+    idempotencyKey: "placement:nested",
+    topic: "placement.created",
+    payload: input,
+  });
+  const createdPayload = created.payload as { placement: { id: string } };
+
+  input.placement.id = "mutated-input";
+  assert.equal(createdPayload.placement.id, "placement_1");
+  assert.throws(() => {
+    createdPayload.placement.id = "mutated-snapshot";
+  }, TypeError);
+  const storedPayload = outbox.get("event_nested")?.payload as {
+    placement: { id: string };
+  };
+  assert.equal(storedPayload.placement.id, "placement_1");
+});

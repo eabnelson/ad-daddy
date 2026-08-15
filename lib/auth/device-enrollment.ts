@@ -21,11 +21,12 @@ export interface DeviceInstallation {
 
 export class DeviceEnrollmentService {
   readonly #grants = new Map<string, EnrollmentGrant>();
+  readonly #pendingGrantByInstallationId = new Map<string, string>();
   readonly #devices = new Map<string, DeviceInstallation>();
   readonly #auditEvents: AuditEvent[] = [];
 
   get auditEvents(): readonly AuditEvent[] {
-    return Object.freeze(this.#auditEvents.map((event) => Object.freeze({ ...event })));
+    return Object.freeze([...this.#auditEvents]);
   }
 
   issueGrant(input: {
@@ -40,12 +41,15 @@ export class DeviceEnrollmentService {
     assertRecentHumanApproval(input.approval, input.accountId, "device_enroll", now);
     if (this.#grants.has(input.grantId)) throw new Error("Enrollment grant already exists");
     if (this.#devices.has(input.installationId)) throw new Error("Installation already enrolled");
-    if ([...this.#grants.values()].some((grant) => grant.installationId === input.installationId && !grant.consumedAt)) {
+    const pendingGrantId = this.#pendingGrantByInstallationId.get(input.installationId);
+    const pendingGrant = pendingGrantId ? this.#grants.get(pendingGrantId) : undefined;
+    if (pendingGrant && !pendingGrant.consumedAt && Date.parse(pendingGrant.expiresAt) > now.getTime()) {
       throw new Error("Installation already has a pending enrollment grant");
     }
     if (Date.parse(input.expiresAt) <= now.getTime()) throw new Error("Enrollment grant must expire in the future");
     const grant = { grantId: input.grantId, accountId: input.accountId, installationId: input.installationId, expiresAt: input.expiresAt };
     this.#grants.set(input.grantId, grant);
+    this.#pendingGrantByInstallationId.set(input.installationId, input.grantId);
     this.audit(input.accountId, "device.enrollment_grant_issued", input.installationId, now, { grantId: input.grantId });
     return Object.freeze({ ...grant });
   }
@@ -65,6 +69,7 @@ export class DeviceEnrollmentService {
     if (grant.accountId !== input.accountId || grant.installationId !== input.installationId) throw new Error("Enrollment grant scope mismatch");
     if (this.#devices.has(input.installationId)) throw new Error("Installation already enrolled");
     grant.consumedAt = now.toISOString();
+    this.#pendingGrantByInstallationId.delete(input.installationId);
     const device: DeviceInstallation = {
       installationId: input.installationId,
       accountId: input.accountId,

@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX `device_enrollment_installation_unique` ON `device_enrollment_grants` (`installation_id`);
