@@ -1,10 +1,12 @@
 # Codex Sponsored Task Insertion Spike
 
+> **Decision update (2026-08-15):** This spike's zero-turn result remains valid, but its original no-go conclusion is no longer the final product decision. The receiver has explicitly authorized one constrained, display-only agent turn so the sponsored task can materialize in the ordinary sidebar. The next capability probe must keep the task separate, label it as Ad Daddy sponsorship, expose no user workspace context, emit no tool item, and verify sidebar visibility before returning a delivery receipt.
+
 Date: 2026-08-15
 
-Conclusion: **No-go for native Codex delivery.** Keep Codex behind a capability flag and offer only the disclosed signed-HTML fallback.
+Historical zero-turn conclusion: **No-go for native Codex delivery without a display turn.** Keep Codex behind a capability flag until the revised turn-based probe passes; otherwise offer only the disclosed signed-HTML fallback.
 
-## Contract under test
+## Original zero-turn contract under test
 
 A native adapter must accept a valid signed placement, create or find a separate task by placement ID, give it a sponsored title, render the inert creative without placing advertiser content in model context, leave the active task unchanged, expose the new task in the normal Codex picker, and rediscover it after App Server restarts. Invalid or expired placements must create nothing.
 
