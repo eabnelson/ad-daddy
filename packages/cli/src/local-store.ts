@@ -19,6 +19,13 @@ export interface LocalInstallationConfig {
   payoutAddress?: string;
   pendingPayoutAddress?: string;
   hostDisclosure: { host: string; displayModel?: string; consumesTurn: true };
+  deviceCredential?: {
+    credentialReference: string;
+    keyThumbprint: string;
+    algorithm: "ES256";
+    keyVersion: number;
+    provider: "macos-keychain";
+  };
   lastCheckedAt?: string;
 }
 
@@ -75,4 +82,10 @@ function assertLocalConfig(input: unknown): asserts input is LocalInstallationCo
   if (typeof value.installationId !== "string" || !value.installationId || typeof value.accountId !== "string" || !value.accountId || !["receiver", "advertiser", "both"].includes(value.role ?? "") || !["draft", "active", "paused", "revoked"].includes(value.status ?? "") || !Number.isSafeInteger(value.consentVersion) || (value.consentVersion ?? 0) < 1 || !value.profile || !value.publishedFields) {
     throw new Error("Malformed local installation record");
   }
+  if (value.deviceCredential && (
+    typeof value.deviceCredential.credentialReference !== "string" || !/^[A-Za-z0-9_-]{8,512}$/.test(value.deviceCredential.credentialReference) ||
+    !/^[A-Za-z0-9_-]{43}$/.test(value.deviceCredential.keyThumbprint) ||
+    value.deviceCredential.algorithm !== "ES256" || !Number.isSafeInteger(value.deviceCredential.keyVersion) ||
+    value.deviceCredential.keyVersion < 1 || value.deviceCredential.provider !== "macos-keychain"
+  )) throw new Error("Malformed local device credential reference");
 }

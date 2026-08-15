@@ -1,4 +1,5 @@
 import type { LocalInstallationConfig, LocalStore, SetupRole } from "../local-store.js";
+import type { DeviceCredential } from "../device-key.js";
 import { buildPublishedProfile, type ReceiverFieldSelection, type ReceiverFieldValues } from "./profile.js";
 
 interface Approval {
@@ -62,6 +63,7 @@ export class ReceiverSetupService {
       payoutAddress,
       pendingPayoutAddress: existing?.pendingPayoutAddress,
       hostDisclosure: structuredClone(input.hostDisclosure),
+      deviceCredential: existing?.deviceCredential ? structuredClone(existing.deviceCredential) : undefined,
     };
     await this.#store.put(config);
     const model = input.hostDisclosure.displayModel ? ` using ${input.hostDisclosure.displayModel}` : " using the host-selected model";
@@ -95,6 +97,25 @@ export class ReceiverSetupService {
     paused.status = "revoked";
     await this.#store.put(paused);
     return paused;
+  }
+
+  async attachDeviceCredential(installationId: string, credential: DeviceCredential) {
+    const config = await this.require(installationId);
+    if (!credential.productionCapable || credential.provider !== "macos-keychain") {
+      throw new Error("Only a production-capable macOS Keychain credential can be attached to an enrolled installation");
+    }
+    if (!/^[A-Za-z0-9_-]{8,512}$/.test(credential.credentialReference)) {
+      throw new Error("The macOS Keychain credential reference is invalid");
+    }
+    config.deviceCredential = {
+      credentialReference: credential.credentialReference,
+      keyThumbprint: credential.keyThumbprint,
+      algorithm: credential.algorithm,
+      keyVersion: credential.keyVersion,
+      provider: credential.provider,
+    };
+    await this.#store.put(config);
+    return config;
   }
 
   async requestPayoutAddressChange(installationId: string, address: string) {

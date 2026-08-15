@@ -21,7 +21,7 @@
     "ad-daddy": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
+    "build": "tsc -p tsconfig.json && node scripts/build-device-helper.mjs && node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test"
   },

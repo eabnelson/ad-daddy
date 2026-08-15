@@ -32,6 +32,7 @@ export { findEligibleOpportunities } from "./commands/opportunity.js";
 export * from "./commands/profile.js";
 export * from "./commands/setup.js";
 export * from "./install-integrity.js";
+export * from "./device-key.js";
 export * from "./local-store.js";
 export * from "./scheduler.js";
 export * from "./schedulers/launchd.js";
