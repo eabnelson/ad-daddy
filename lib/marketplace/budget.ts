@@ -31,6 +31,7 @@ interface BudgetRecord {
   dailyCapMinor: number;
   reservations: Map<string, BudgetReservation>;
   holds: Map<string, number>;
+  committedHolds: Map<string, number>;
 }
 
 export class CampaignBudgetService {
@@ -52,6 +53,7 @@ export class CampaignBudgetService {
       dailyCapMinor: input.dailyCapMinor,
       reservations: new Map(),
       holds: new Map(),
+      committedHolds: new Map(),
     });
     return this.snapshot(input.campaignId);
   }
@@ -95,11 +97,38 @@ export class CampaignBudgetService {
     return this.#serial.run(campaignId, () => {
       const record = this.require(campaignId);
       const reservation = record.reservations.get(reservationId);
-      if (!reservation || reservation.status !== "reserved") throw new Error("Reservation is not active");
+      if (!reservation) throw new Error("Reservation is not active");
+      if (reservation.status === "committed") return Object.freeze({ ...reservation });
+      if (reservation.status !== "reserved") throw new Error("Reservation is not active");
       reservation.status = "committed";
       record.reservedMinor -= reservation.amountMinor;
       record.spentMinor += reservation.amountMinor;
       return Object.freeze({ ...reservation });
+    });
+  }
+
+  async commitHold(campaignId: string, holdId: string): Promise<CampaignBudgetSnapshot> {
+    return this.#serial.run(campaignId, () => {
+      const record = this.require(campaignId);
+      if (record.committedHolds.has(holdId)) return this.toSnapshot(record);
+      const amountMinor = record.holds.get(holdId);
+      if (amountMinor === undefined) throw new Error("Unknown campaign hold");
+      record.holds.delete(holdId);
+      record.heldMinor -= amountMinor;
+      record.spentMinor += amountMinor;
+      record.committedHolds.set(holdId, amountMinor);
+      return this.toSnapshot(record);
+    });
+  }
+
+  async releaseHold(campaignId: string, holdId: string): Promise<CampaignBudgetSnapshot> {
+    return this.#serial.run(campaignId, () => {
+      const record = this.require(campaignId);
+      const amountMinor = record.holds.get(holdId);
+      if (amountMinor === undefined) return this.toSnapshot(record);
+      record.holds.delete(holdId);
+      record.heldMinor -= amountMinor;
+      return this.toSnapshot(record);
     });
   }
 

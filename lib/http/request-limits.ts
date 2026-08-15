@@ -14,6 +14,7 @@ export class RequestLimitError extends Error {
 export const CAMPAIGN_REQUEST_LIMITS = Object.freeze({ maxBytes: 32_768, maxCollectionItems: 50, maxDepth: 8, maxStringLength: 8_192 });
 export const OPPORTUNITY_REQUEST_LIMITS = Object.freeze({ maxBytes: 8_192, maxCollectionItems: 100, maxDepth: 6, maxStringLength: 1_024 });
 export const AUCTION_REQUEST_LIMITS = Object.freeze({ maxBytes: 16_384, maxCollectionItems: 50, maxDepth: 6, maxStringLength: 2_048 });
+export const PAYMENT_REQUEST_LIMITS = Object.freeze({ maxBytes: 16_384, maxCollectionItems: 32, maxDepth: 6, maxStringLength: 2_048 });
 
 export async function parseBoundedJson(request: Request, limits: RequestLimits): Promise<unknown> {
   if (!Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1) throw new Error("maxBytes must be positive");

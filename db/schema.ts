@@ -463,6 +463,103 @@ export const onchainTransfers = sqliteTable("onchain_transfers", {
   uniqueIndex("onchain_transfer_event_unique").on(table.environment, table.chainId, table.transactionHash, table.logIndex),
 ]);
 
+export const depositCommitments = sqliteTable("deposit_commitments", {
+  id: text("id").primaryKey(),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  advertiserAccountId: text("advertiser_account_id").notNull().references(() => humanAccounts.id),
+  opaqueMemo: text("opaque_memo").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  expectedSender: text("expected_sender"),
+  policyVersion: text("policy_version").notNull(),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("deposit_commitment_memo_unique").on(table.opaqueMemo),
+  check("deposit_commitment_amount_positive", sql`${table.amountMinor} > 0`),
+]);
+
+export const chainPaymentEvents = sqliteTable("chain_payment_events", {
+  id: text("id").primaryKey(),
+  commitmentId: text("commitment_id").references(() => depositCommitments.id),
+  chainId: text("chain_id").notNull(),
+  tokenAddress: text("token_address").notNull(),
+  transactionHash: text("transaction_hash").notNull(),
+  logIndex: integer("log_index").notNull(),
+  opaqueMemo: text("opaque_memo").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  status: text("status", { enum: ["credited", "quarantined", "reorged"] }).notNull(),
+  reason: text("reason"),
+  policyVersion: text("policy_version").notNull(),
+  observedAt: createdAt(),
+}, (table) => [
+  uniqueIndex("chain_payment_event_unique").on(table.chainId, table.transactionHash, table.logIndex),
+  index("chain_payment_memo_idx").on(table.opaqueMemo),
+  check("chain_payment_amount_positive", sql`${table.amountMinor} > 0`),
+]);
+
+export const conversionClaims = sqliteTable("conversion_claims", {
+  id: text("id").primaryKey(),
+  placementId: text("placement_id").notNull().references(() => placements.id),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  evidenceProvider: text("evidence_provider"),
+  evidenceId: text("evidence_id"),
+  evidenceType: text("evidence_type").notNull(),
+  bonusGrossMinor: integer("bonus_gross_minor").notNull(),
+  receiverMinor: integer("receiver_minor").notNull(),
+  operatorMinor: integer("operator_minor").notNull(),
+  status: text("status", { enum: ["awaiting_evidence", "pending", "paid", "rejected"] }).notNull(),
+  releaseAt: text("release_at"),
+  policyVersion: text("policy_version").notNull(),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("conversion_claim_placement_unique").on(table.placementId),
+  uniqueIndex("conversion_claim_evidence_unique").on(table.evidenceProvider, table.evidenceId),
+  check("conversion_claim_amounts_balanced", sql`${table.bonusGrossMinor} > 0 AND ${table.receiverMinor} + ${table.operatorMinor} = ${table.bonusGrossMinor}`),
+]);
+
+export const payoutDestinations = sqliteTable("payout_destinations", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  address: text("address").notNull(),
+  approvedAt: text("approved_at").notNull(),
+  activatesAt: text("activates_at").notNull(),
+  supersededAt: text("superseded_at"),
+  createdAt: createdAt(),
+}, (table) => [index("payout_destination_active_idx").on(table.accountId, table.activatesAt)]);
+
+export const payoutRecords = sqliteTable("payout_records", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  destinationId: text("destination_id").notNull().references(() => payoutDestinations.id),
+  amountMinor: integer("amount_minor").notNull(),
+  opaqueMemo: text("opaque_memo").notNull(),
+  status: text("status", { enum: ["queued", "failed", "paid"] }).notNull(),
+  transactionHash: text("transaction_hash"),
+  policyVersion: text("policy_version").notNull(),
+  createdAt: createdAt(),
+  paidAt: text("paid_at"),
+}, (table) => [
+  uniqueIndex("payout_record_memo_unique").on(table.opaqueMemo),
+  check("payout_record_amount_positive", sql`${table.amountMinor} > 0`),
+]);
+
+export const refundRecords = sqliteTable("refund_records", {
+  id: text("id").primaryKey(),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  amountMinor: integer("amount_minor").notNull(),
+  address: text("address").notNull(),
+  opaqueMemo: text("opaque_memo").notNull(),
+  reservedMinor: integer("reserved_minor").notNull(),
+  heldMinor: integer("held_minor").notNull(),
+  status: text("status", { enum: ["pending", "failed", "paid"] }).notNull(),
+  transactionHash: text("transaction_hash"),
+  policyVersion: text("policy_version").notNull(),
+  createdAt: createdAt(),
+  paidAt: text("paid_at"),
+}, (table) => [
+  uniqueIndex("refund_record_memo_unique").on(table.opaqueMemo),
+  check("refund_record_amounts_nonnegative", sql`${table.amountMinor} > 0 AND ${table.reservedMinor} >= 0 AND ${table.heldMinor} >= 0`),
+]);
+
 export const launchPolicies = sqliteTable("launch_policies", {
   environment: text("environment", { enum: ENVIRONMENTS }).notNull(),
   version: text("version").notNull(),
