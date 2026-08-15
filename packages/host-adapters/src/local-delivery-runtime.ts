@@ -47,18 +47,6 @@ export interface LocalDeliveryStateStore {
   put(record: LocalDeliveryRecord): Promise<void>;
 }
 
-export class MemoryLocalDeliveryStateStore implements LocalDeliveryStateStore {
-  readonly #records = new Map<string, LocalDeliveryRecord>();
-
-  async get(placementId: string): Promise<LocalDeliveryRecord | undefined> {
-    return clone(this.#records.get(placementId));
-  }
-
-  async put(record: LocalDeliveryRecord): Promise<void> {
-    this.#records.set(record.placementId, clone(record)!);
-  }
-}
-
 /** Durable, user-owned state for local host task identifiers and receipts. */
 export class JsonLocalDeliveryStateStore implements LocalDeliveryStateStore {
   readonly #path: string;

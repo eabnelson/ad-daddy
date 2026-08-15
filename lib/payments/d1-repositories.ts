@@ -6,6 +6,10 @@ import type { DurableRefundRecord, PaymentStateRepository } from "./repository.t
 import type { RefundApprovalRecord, RefundApprovalRepository, VerifiedRefundHumanProof } from "./refunds.ts";
 
 type Row = Record<string, unknown>;
+const DEPOSIT_RECORD_COLUMNS = `e.id AS depositId, e.commitment_id AS commitmentId, c.campaign_id AS campaignId,
+  c.advertiser_account_id AS advertiserAccountId, e.chain_id AS chainId, e.token_address AS tokenAddress,
+  e.transaction_hash AS transactionHash, e.log_index AS logIndex, e.opaque_memo AS memo,
+  e.amount_minor AS amountMinor, e.status, e.reason, e.policy_version AS policyVersion`;
 
 export class D1LedgerRepository implements LedgerRepository {
   readonly #db: D1Database;
@@ -101,28 +105,19 @@ export class D1PaymentStateRepository implements PaymentStateRepository {
   }
   async getDepositRecord(eventKey: string) {
     const [chainId, transactionHash, logIndex] = splitEventKey(eventKey);
-    const row = await this.#db.prepare(`SELECT e.id AS depositId, e.commitment_id AS commitmentId, c.campaign_id AS campaignId,
-      c.advertiser_account_id AS advertiserAccountId, e.chain_id AS chainId, e.token_address AS tokenAddress,
-      e.transaction_hash AS transactionHash, e.log_index AS logIndex, e.opaque_memo AS memo,
-      e.amount_minor AS amountMinor, e.status, e.reason, e.policy_version AS policyVersion
+    const row = await this.#db.prepare(`SELECT ${DEPOSIT_RECORD_COLUMNS}
       FROM chain_payment_events e LEFT JOIN deposit_commitments c ON c.id = e.commitment_id
       WHERE e.chain_id = ? AND e.transaction_hash = ? AND e.log_index = ?`).bind(chainId, transactionHash, logIndex).first<Row>();
     return row ? depositRecord(row) : undefined;
   }
   async getDepositRecordByMemo(memo: string) {
-    const row = await this.#db.prepare(`SELECT e.id AS depositId, e.commitment_id AS commitmentId, c.campaign_id AS campaignId,
-      c.advertiser_account_id AS advertiserAccountId, e.chain_id AS chainId, e.token_address AS tokenAddress,
-      e.transaction_hash AS transactionHash, e.log_index AS logIndex, e.opaque_memo AS memo,
-      e.amount_minor AS amountMinor, e.status, e.reason, e.policy_version AS policyVersion
+    const row = await this.#db.prepare(`SELECT ${DEPOSIT_RECORD_COLUMNS}
       FROM chain_payment_events e LEFT JOIN deposit_commitments c ON c.id = e.commitment_id
       WHERE e.opaque_memo = ? AND e.status <> 'quarantined' ORDER BY e.created_at LIMIT 1`).bind(memo.toLowerCase()).first<Row>();
     return row ? depositRecord(row) : undefined;
   }
   async findCreditedCampaignDeposit(input: { campaignId: string; advertiserAccountId: string; amountMinor: number; tokenAddress: string }) {
-    const row = await this.#db.prepare(`SELECT e.id AS depositId, e.commitment_id AS commitmentId, c.campaign_id AS campaignId,
-      c.advertiser_account_id AS advertiserAccountId, e.chain_id AS chainId, e.token_address AS tokenAddress,
-      e.transaction_hash AS transactionHash, e.log_index AS logIndex, e.opaque_memo AS memo,
-      e.amount_minor AS amountMinor, e.status, e.reason, e.policy_version AS policyVersion
+    const row = await this.#db.prepare(`SELECT ${DEPOSIT_RECORD_COLUMNS}
       FROM chain_payment_events e JOIN deposit_commitments c ON c.id = e.commitment_id
       WHERE c.campaign_id = ? AND c.advertiser_account_id = ? AND e.amount_minor = ?
         AND lower(e.token_address) = lower(?) AND e.status = 'credited' LIMIT 1`)

@@ -1,18 +1,19 @@
 import { requireChatGPTUser } from "../../chatgpt-auth";
+import { RECEIVER_FIELD_KEYS, type ReceiverFieldKey } from "@ad-daddy/cli";
 
-const fields = [
-  ["coarseLocation", "Coarse location"],
-  ["projectNames", "Project names"],
-  ["publicRepositoryUrls", "Public GitHub repositories"],
-  ["privateRepoTechStacks", "Private repo stack (derived locally)"],
-  ["projectDescriptions", "Project descriptions"],
-  ["adFrequency", "Ad frequency"],
-  ["subscriptionTier", "Subscription tier"],
-  ["tokenUsageRange", "Token usage range"],
-  ["totalSessionRange", "Total session range"],
-  ["acceptedRewardTypes", "Stablecoin, credits, or discounts"],
-  ["minimumTakeHomeMinor", "Minimum cash take-home"],
-] as const;
+const FIELD_LABELS: Record<ReceiverFieldKey, string> = {
+  coarseLocation: "Coarse location",
+  projectNames: "Project names",
+  publicRepositoryUrls: "Public GitHub repositories",
+  privateRepoTechStacks: "Private repo stack (derived locally)",
+  projectDescriptions: "Project descriptions",
+  adFrequency: "Ad frequency",
+  subscriptionTier: "Subscription tier",
+  tokenUsageRange: "Token usage range",
+  totalSessionRange: "Total session range",
+  acceptedRewardTypes: "Stablecoin, credits, or discounts",
+  minimumTakeHomeMinor: "Minimum cash take-home",
+};
 
 export default async function ReceiverSettingsPage() {
   await requireChatGPTUser("/receiver/settings");
@@ -22,8 +23,8 @@ export default async function ReceiverSettingsPage() {
       <form action="/api/receiver/settings" method="post">
         <fieldset>
           <legend>Published snapshot</legend>
-          {fields.map(([name, label]) => (
-            <label key={name}><input type="checkbox" name={`enabled.${name}`} /> {label}</label>
+          {RECEIVER_FIELD_KEYS.map((name) => (
+            <label key={name}><input type="checkbox" name={`enabled.${name}`} /> {FIELD_LABELS[name]}</label>
           ))}
           <label>Coarse location<input name="coarseLocation" placeholder="US Northeast" /></label>
           <label>Project names<input name="projectNames" placeholder="Agent inbox, API monitor" /></label>

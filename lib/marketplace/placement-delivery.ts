@@ -55,7 +55,6 @@ export interface PlacementDeliveryRepository {
   get(placementId: string): Promise<PlacementDeliveryRecord | undefined>;
   put(record: PlacementDeliveryRecord): Promise<void>;
   listByReceiver(receiverAccountId: string): Promise<readonly PlacementDeliveryRecord[]>;
-  listByAdvertiser(advertiserId: string): Promise<readonly PlacementDeliveryRecord[]>;
   listByCampaign(campaignId: string): Promise<readonly PlacementDeliveryRecord[]>;
 }
 
@@ -65,9 +64,6 @@ export class MemoryPlacementDeliveryRepository implements PlacementDeliveryRepos
   async put(record: PlacementDeliveryRecord) { this.#records.set(record.placementId, clone(record)!); }
   async listByReceiver(receiverAccountId: string) {
     return [...this.#records.values()].filter((record) => record.receiverAccountId === receiverAccountId).map((record) => clone(record)!);
-  }
-  async listByAdvertiser(advertiserId: string) {
-    return [...this.#records.values()].filter((record) => record.validatedCreative.payload.advertiser.id === advertiserId).map((record) => clone(record)!);
   }
   async listByCampaign(campaignId: string) {
     return [...this.#records.values()].filter((record) => record.marketContext?.campaignId === campaignId).map((record) => clone(record)!);

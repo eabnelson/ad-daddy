@@ -210,12 +210,15 @@ export async function deliverCodexPlacement(
   let toolItemCount = 0;
 
   try {
-    thread = options.existingHostIdentifiers
-      ? await readThread(connection, options.existingHostIdentifiers.threadId)
-      : await findPlacementThread(connection, payload.placementId, title);
+    if (options.existingHostIdentifiers) {
+      thread = await readThread(connection, options.existingHostIdentifiers.threadId);
+    } else {
+      const discovered = await findPlacementThread(connection, payload.placementId, title);
+      thread = discovered ? await readThread(connection, discovered.id) : null;
+    }
     let needsDisplayTurn = false;
     if (thread) {
-      const existing = await readThread(connection, thread.id);
+      const existing = thread;
       const turns = existing.turns ?? [];
       if (turns.length === 0) {
         if (!options.existingHostIdentifiers?.instructionSourcesVerified) {

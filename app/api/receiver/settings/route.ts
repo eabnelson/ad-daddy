@@ -1,7 +1,9 @@
 import {
   MemoryLocalStore,
+  RECEIVER_FIELD_KEYS,
   ReceiverSetupService,
   type LocalStore,
+  type ReceiverFieldKey,
   type ReceiverFieldSelection,
   type ReceiverFieldValues,
 } from "@ad-daddy/cli";
@@ -9,12 +11,12 @@ import {
 const MAX_FORM_BYTES = 16_384;
 const TERMS_VERSION = "receiver-terms/2026-08-15";
 const PRIVACY_VERSION = "privacy/2026-08-15";
-const FIELD_KEYS = [
-  "coarseLocation", "projectNames", "publicRepositoryUrls", "privateRepoTechStacks",
-  "projectDescriptions", "adFrequency", "subscriptionTier", "tokenUsageRange",
-  "totalSessionRange", "acceptedRewardTypes", "minimumTakeHomeMinor",
-] as const;
-type FieldKey = (typeof FIELD_KEYS)[number];
+const ALLOWED_FORM_KEYS = new Set([
+  "intent", "cadenceMinutes", "quietHours", "coarseLocation", "projectNames",
+  "publicRepositoryUrls", "privateRepoTechStacks", "projectDescriptions", "maxAdsPerDay",
+  "subscriptionTier", "tokenUsageRange", "totalSessionRange", "rewardType", "minimumTakeHomeMinor",
+  ...RECEIVER_FIELD_KEYS.map((key) => `enabled.${key}`),
+]);
 
 export interface ReceiverSettingsRuntime {
   store: LocalStore;
@@ -95,20 +97,14 @@ async function parseBoundedForm(request: Request): Promise<URLSearchParams> {
   const body = await request.text();
   if (new TextEncoder().encode(body).byteLength > MAX_FORM_BYTES) throw new Error("Receiver settings form is too large");
   const form = new URLSearchParams(body);
-  const allowed = new Set([
-    "intent", "cadenceMinutes", "quietHours", "coarseLocation", "projectNames",
-    "publicRepositoryUrls", "privateRepoTechStacks", "projectDescriptions", "maxAdsPerDay",
-    "subscriptionTier", "tokenUsageRange", "totalSessionRange", "rewardType", "minimumTakeHomeMinor",
-    ...FIELD_KEYS.map((key) => `enabled.${key}`),
-  ]);
-  if ([...form.keys()].length > 40 || [...form.keys()].some((key) => !allowed.has(key))) throw new Error("Receiver settings contain unsupported fields");
+  if ([...form.keys()].length > 40 || [...form.keys()].some((key) => !ALLOWED_FORM_KEYS.has(key))) throw new Error("Receiver settings contain unsupported fields");
   for (const value of form.values()) if (value.length > 1_024) throw new Error("Receiver setting is too long");
   return form;
 }
 
 function profileFrom(form: URLSearchParams): { values: ReceiverFieldValues; enabled: ReceiverFieldSelection } {
   const enabled: ReceiverFieldSelection = {};
-  for (const key of FIELD_KEYS) enabled[key] = form.get(`enabled.${key}`) === "on";
+  for (const key of RECEIVER_FIELD_KEYS) enabled[key] = form.get(`enabled.${key}`) === "on";
   const values: ReceiverFieldValues = {};
   put(values, "coarseLocation", optional(form.get("coarseLocation")));
   put(values, "projectNames", list(form.get("projectNames")));
@@ -124,7 +120,8 @@ function profileFrom(form: URLSearchParams): { values: ReceiverFieldValues; enab
   const minimum = optionalInteger(form.get("minimumTakeHomeMinor"), "minimumTakeHomeMinor", 0, Number.MAX_SAFE_INTEGER);
   put(values, "minimumTakeHomeMinor", minimum);
   const maxPerDay = optionalInteger(form.get("maxAdsPerDay"), "maxAdsPerDay", 1, 24);
-  if (maxPerDay !== undefined) values.adFrequency = { maxPerDay, ...(quietHours(form.get("quietHours")) ? { quietHours: quietHours(form.get("quietHours")) } : {}) };
+  const quiet = quietHours(form.get("quietHours"));
+  if (maxPerDay !== undefined) values.adFrequency = { maxPerDay, ...(quiet ? { quietHours: quiet } : {}) };
   return { values, enabled };
 }
 
@@ -155,7 +152,7 @@ function quietHours(value: string | null): { startHourLocal: number; endHourLoca
   if (!match) throw new Error("quietHours must look like 22:00-07:00");
   return { startHourLocal: integer(match[1], "quietHours start", 0, 23), endHourLocal: integer(match[2], "quietHours end", 0, 23) };
 }
-function put<K extends FieldKey>(target: ReceiverFieldValues, key: K, value: ReceiverFieldValues[K] | undefined): void {
+function put<K extends ReceiverFieldKey>(target: ReceiverFieldValues, key: K, value: ReceiverFieldValues[K] | undefined): void {
   if (value !== undefined) Object.assign(target, { [key]: value });
 }
 function boundedMessage(error: unknown): string { return (error instanceof Error ? error.message : "Request rejected").slice(0, 240); }

@@ -17,7 +17,7 @@ export interface ReceiverFieldValues {
 export type ReceiverFieldKey = keyof ReceiverFieldValues;
 export type ReceiverFieldSelection = Partial<Record<ReceiverFieldKey, boolean>>;
 
-const RECEIVER_FIELD_KEYS: readonly ReceiverFieldKey[] = [
+export const RECEIVER_FIELD_KEYS: readonly ReceiverFieldKey[] = [
   "coarseLocation", "projectNames", "publicRepositoryUrls", "privateRepoTechStacks",
   "projectDescriptions", "adFrequency", "subscriptionTier", "tokenUsageRange",
   "totalSessionRange", "acceptedRewardTypes", "minimumTakeHomeMinor",

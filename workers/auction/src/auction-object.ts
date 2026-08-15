@@ -24,15 +24,17 @@ export class AuctionObject {
   constructor(state: DurableObjectStateLike, env: AuctionEnvironment) { this.#state = state; this.#env = env; }
 
   fetch(request: Request): Promise<Response> {
-    const operation = this.#tail.then(() => this.handle(request));
-    this.#tail = operation.then(() => undefined, () => undefined);
-    return operation;
+    return this.serialize(() => this.handle(request));
   }
 
   alarm(): Promise<void> {
-    const operation = this.#tail.then(() => this.runAlarm());
-    this.#tail = operation.then(() => undefined, () => undefined);
-    return operation;
+    return this.serialize(() => this.runAlarm());
+  }
+
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = this.#tail.then(operation);
+    this.#tail = queued.then(() => undefined, () => undefined);
+    return queued;
   }
 
   private async runAlarm(): Promise<void> {

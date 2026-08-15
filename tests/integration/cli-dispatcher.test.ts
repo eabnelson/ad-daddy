@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const execute = promisify(execFile);
-const cli = new URL("../../packages/cli/dist/index.js", import.meta.url).pathname;
+const cli = fileURLToPath(new URL("../../packages/cli/dist/index.js", import.meta.url));
 
 test("installed ad-daddy bin dispatches every documented command as machine-readable JSON", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "ad-daddy-cli-"));
@@ -22,7 +23,10 @@ test("installed ad-daddy bin dispatches every documented command as machine-read
     response.end(JSON.stringify(request.url === "/poll" ? { status: "no_placement" } : request.url === "/api/v1/opportunities" ? { items: [], nextCursor: null } : { campaign: body.campaign ?? { campaignId: body.campaignId, status: body.action } }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  });
   const address = server.address();
   assert.ok(address && typeof address === "object");
   const base = `http://127.0.0.1:${address.port}`;
