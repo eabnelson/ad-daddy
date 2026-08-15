@@ -83,6 +83,34 @@ export const installations = sqliteTable("installations", {
   check("installation_key_version_positive", sql`${table.keyVersion} > 0`),
 ]);
 
+export const installationDeviceKeys = sqliteTable("installation_device_keys", {
+  installationId: text("installation_id").notNull().references(() => installations.id),
+  keyVersion: integer("key_version").notNull(),
+  algorithm: text("algorithm", { enum: ["ES256"] }).notNull(),
+  publicJwkJson: text("public_jwk_json").notNull(),
+  keyThumbprint: text("key_thumbprint").notNull(),
+  status: text("status", { enum: ["active", "revoked", "retired"] }).notNull().default("active"),
+  enrolledAt: text("enrolled_at").notNull(),
+  retiredAt: text("retired_at"),
+  revokedAt: text("revoked_at"),
+}, (table) => [
+  primaryKey({ columns: [table.installationId, table.keyVersion] }),
+  uniqueIndex("installation_device_key_thumbprint_unique").on(table.installationId, table.keyThumbprint),
+  index("installation_device_key_status_idx").on(table.installationId, table.status),
+  check("installation_device_key_version_positive", sql`${table.keyVersion} > 0`),
+]);
+
+export const deviceProofNonces = sqliteTable("device_proof_nonces", {
+  installationId: text("installation_id").notNull().references(() => installations.id),
+  nonce: text("nonce").notNull(),
+  canonicalRequestSha256: text("canonical_request_sha256").notNull(),
+  firstUsedAt: text("first_used_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.installationId, table.nonce] }),
+  index("device_proof_nonce_expiry_idx").on(table.expiresAt),
+]);
+
 export const managedCredentials = sqliteTable("managed_credentials", {
   id: text("id").primaryKey(),
   accountId: text("account_id").references(() => humanAccounts.id),
@@ -357,6 +385,66 @@ export const placements = sqliteTable("placements", {
   uniqueIndex("placement_idempotency_unique").on(table.idempotencyKey),
   check("placement_amounts_nonnegative", sql`${table.grossAmountMinor} >= 0 AND ${table.receiverAmountMinor} >= 0 AND ${table.operatorAmountMinor} >= 0`),
   check("placement_split_balanced", sql`${table.receiverAmountMinor} + ${table.operatorAmountMinor} = ${table.grossAmountMinor}`),
+]);
+
+export const placementClaims = sqliteTable("placement_claims", {
+  id: text("id").primaryKey(),
+  placementId: text("placement_id").notNull().references(() => placements.id),
+  opportunityId: text("opportunity_id").notNull().references(() => opportunities.id),
+  reservationId: text("reservation_id").notNull().references(() => campaignBudgetReservations.id),
+  receiverProfileId: text("receiver_profile_id").notNull().references(() => receiverProfiles.id),
+  installationId: text("installation_id").notNull().references(() => installations.id),
+  consentVersion: integer("consent_version").notNull(),
+  deviceKeyThumbprint: text("device_key_thumbprint").notNull(),
+  creativeDigest: text("creative_digest").notNull(),
+  state: text("state", { enum: ["claimed", "delivery_leased", "displayed_pending_receipt", "consumed", "settlement_review", "expired", "cancelled"] }).notNull(),
+  grantJson: text("grant_json").notNull(),
+  issuedAt: text("issued_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  consumedAt: text("consumed_at"),
+  cancelledAt: text("cancelled_at"),
+}, (table) => [
+  uniqueIndex("placement_claim_placement_unique").on(table.placementId),
+  uniqueIndex("placement_claim_opportunity_unique").on(table.opportunityId),
+  uniqueIndex("placement_claim_reservation_unique").on(table.reservationId),
+  index("placement_claim_installation_state_idx").on(table.installationId, table.state),
+  index("placement_claim_expiry_idx").on(table.state, table.expiresAt),
+  check("placement_claim_consent_version_positive", sql`${table.consentVersion} > 0`),
+]);
+
+export const placementDeliveryLeases = sqliteTable("placement_delivery_leases", {
+  id: text("id").primaryKey(),
+  claimId: text("claim_id").notNull().references(() => placementClaims.id),
+  installationId: text("installation_id").notNull().references(() => installations.id),
+  deviceKeyThumbprint: text("device_key_thumbprint").notNull(),
+  creativeDigest: text("creative_digest").notNull(),
+  policyVersion: text("policy_version").notNull(),
+  state: text("state", { enum: ["active", "displayed", "expired", "cancelled"] }).notNull().default("active"),
+  issuedAt: text("issued_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  displayedAt: text("displayed_at"),
+}, (table) => [
+  uniqueIndex("placement_delivery_lease_claim_unique").on(table.claimId),
+  index("placement_delivery_lease_expiry_idx").on(table.state, table.expiresAt),
+]);
+
+export const placementReceiptRecovery = sqliteTable("placement_receipt_recovery", {
+  claimId: text("claim_id").primaryKey().references(() => placementClaims.id),
+  placementId: text("placement_id").notNull().references(() => placements.id),
+  leaseId: text("lease_id").notNull().references(() => placementDeliveryLeases.id),
+  displayReceiptDigest: text("display_receipt_digest").notNull(),
+  state: text("state", { enum: ["pending", "submitted", "settlement_review", "settled", "cancelled"] }).notNull().default("pending"),
+  policyVersion: text("policy_version").notNull(),
+  resolutionAuthority: text("resolution_authority", { enum: ["operator_dual_control"] }).notNull(),
+  displayedAt: text("displayed_at").notNull(),
+  graceExpiresAt: text("grace_expires_at").notNull(),
+  settlementReviewDeadlineAt: text("settlement_review_deadline_at").notNull(),
+  receiptSubmittedAt: text("receipt_submitted_at"),
+  resolvedAt: text("resolved_at"),
+  resolutionAuditEventId: text("resolution_audit_event_id").references(() => auditEvents.id),
+}, (table) => [
+  uniqueIndex("placement_receipt_recovery_placement_unique").on(table.placementId),
+  index("placement_receipt_recovery_deadline_idx").on(table.state, table.graceExpiresAt, table.settlementReviewDeadlineAt),
 ]);
 
 export const placementMeasurementEvents = sqliteTable("placement_measurement_events", {

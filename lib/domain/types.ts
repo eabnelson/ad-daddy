@@ -66,8 +66,13 @@ export const PLACEMENT_STATES = [
   "offered",
   "bidding",
   "won",
+  "claimed",
+  "delivery_leased",
+  "displayed_pending_receipt",
   "delivered",
   "settled",
+  "settlement_review",
+  "cancelled",
   "conversion_pending",
   "conversion_paid",
   "conversion_rejected",
@@ -82,6 +87,30 @@ export interface OpportunityState {
   consentVersion: number;
   state: "offered" | "bidding" | "no_fill";
   invalidatedReason?: "stale_consent" | "receiver_paused" | "receiver_revoked";
+}
+
+export type ClaimState =
+  | "claimed"
+  | "delivery_leased"
+  | "displayed_pending_receipt"
+  | "consumed"
+  | "settlement_review"
+  | "expired"
+  | "cancelled";
+
+export interface PlacementClaim {
+  claimId: string;
+  placementId: string;
+  opportunityId: string;
+  reservationId: string;
+  receiverProfileId: string;
+  installationId: string;
+  consentVersion: number;
+  deviceKeyThumbprint: string;
+  creativeDigest: string;
+  state: ClaimState;
+  issuedAt: string;
+  expiresAt: string;
 }
 
 export const LEDGER_TRANSACTION_KINDS = [

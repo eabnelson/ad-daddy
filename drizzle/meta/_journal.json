@@ -57,6 +57,13 @@
       "when": 1786825867930,
       "tag": "0007_orange_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786833324673,
+      "tag": "0008_clumsy_iron_patriot",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,10 @@ export interface ProductionLaunchPolicy {
   profileSnapshotExpirySeconds: VersionedPolicyValue<number>;
   auctionWindowSeconds: VersionedPolicyValue<number>;
   deliveryDeadlineSeconds: VersionedPolicyValue<number>;
+  creativeRedemptionLeaseSeconds: VersionedPolicyValue<number>;
+  receiptSubmissionGraceSeconds: VersionedPolicyValue<number>;
+  settlementReviewSlaHours: VersionedPolicyValue<number>;
+  settlementReviewResolutionAuthority: VersionedPolicyValue<"operator_dual_control">;
   displayModel: VersionedPolicyValue<string>;
   displayTimeoutMs: VersionedPolicyValue<number>;
   displayOutputCharacterBudget: VersionedPolicyValue<number>;
@@ -46,6 +50,10 @@ const POLICY_FIELDS = [
   "profileSnapshotExpirySeconds",
   "auctionWindowSeconds",
   "deliveryDeadlineSeconds",
+  "creativeRedemptionLeaseSeconds",
+  "receiptSubmissionGraceSeconds",
+  "settlementReviewSlaHours",
+  "settlementReviewResolutionAuthority",
   "displayModel",
   "displayTimeoutMs",
   "displayOutputCharacterBudget",
@@ -68,11 +76,18 @@ const POLICY_FIELDS = [
 ] as const satisfies readonly (keyof ProductionLaunchPolicy)[];
 
 const NON_NEGATIVE_FIELDS = new Set<string>(["payoutMinimumMinor"]);
-const STRING_FIELDS = new Set<string>(["displayModel", "refundAddressVerification"]);
+const STRING_FIELDS = new Set<string>([
+  "displayModel",
+  "refundAddressVerification",
+  "settlementReviewResolutionAuthority",
+]);
 const MAXIMUMS: Readonly<Record<string, number>> = Object.freeze({
   profileSnapshotExpirySeconds: 604_800,
   auctionWindowSeconds: 3_600,
   deliveryDeadlineSeconds: 86_400,
+  creativeRedemptionLeaseSeconds: 3_600,
+  receiptSubmissionGraceSeconds: 604_800,
+  settlementReviewSlaHours: 720,
   displayTimeoutMs: 300_000,
   displayOutputCharacterBudget: 50_000,
   creativeReceiptRetentionDays: 365,
@@ -144,6 +159,12 @@ export function validateLaunchPolicy(input: unknown): {
         entry.value !== "passkey_and_wallet_signature"
       ) {
         throw new LaunchPolicyError(field, "must use an approved proof method");
+      }
+      if (
+        field === "settlementReviewResolutionAuthority" &&
+        entry.value !== "operator_dual_control"
+      ) {
+        throw new LaunchPolicyError(field, "must require operator dual control");
       }
     } else if (
       !Number.isSafeInteger(entry.value) ||

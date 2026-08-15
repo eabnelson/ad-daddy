@@ -6,6 +6,7 @@ import {
   createConsentVersion,
   validateReceiverProfileSnapshot,
 } from "../../lib/domain/schemas.ts";
+import { PLACEMENT_STATES } from "../../lib/domain/types.ts";
 import {
   invalidateForConsentChange,
   transitionPlacement,
@@ -124,8 +125,19 @@ test("placement lifecycle accepts only explicit forward transitions", () => {
     ["offered", "no_fill"],
     ["bidding", "won"],
     ["bidding", "no_fill"],
-    ["won", "delivered"],
+    ["won", "claimed"],
     ["won", "expired"],
+    ["won", "cancelled"],
+    ["claimed", "delivery_leased"],
+    ["claimed", "expired"],
+    ["claimed", "cancelled"],
+    ["delivery_leased", "displayed_pending_receipt"],
+    ["delivery_leased", "expired"],
+    ["delivery_leased", "cancelled"],
+    ["displayed_pending_receipt", "delivered"],
+    ["displayed_pending_receipt", "settlement_review"],
+    ["settlement_review", "delivered"],
+    ["settlement_review", "cancelled"],
     ["delivered", "settled"],
     ["settled", "conversion_pending"],
     ["conversion_pending", "conversion_paid"],
@@ -136,13 +148,15 @@ test("placement lifecycle accepts only explicit forward transitions", () => {
     assert.equal(transitionPlacement(from, to), to);
   }
 
-  for (const [from, to] of [
-    ["won", "bidding"],
-    ["settled", "delivered"],
-    ["no_fill", "offered"],
-    ["conversion_paid", "conversion_pending"],
-    ["offered", "delivered"],
-  ] as const) {
-    assert.throws(() => transitionPlacement(from, to), /Illegal placement transition/);
+  const legalPairs = new Set(legal.map(([from, to]) => `${from}:${to}`));
+  for (const from of PLACEMENT_STATES) {
+    for (const to of PLACEMENT_STATES) {
+      if (legalPairs.has(`${from}:${to}`)) continue;
+      assert.throws(
+        () => transitionPlacement(from, to),
+        /Illegal placement transition/,
+        `${from} -> ${to} must fail`,
+      );
+    }
   }
 });

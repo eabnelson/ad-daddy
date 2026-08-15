@@ -16,6 +16,10 @@ function policy(): ProductionLaunchPolicy {
     profileSnapshotExpirySeconds: value(3_600),
     auctionWindowSeconds: value(30),
     deliveryDeadlineSeconds: value(300),
+    creativeRedemptionLeaseSeconds: value(90),
+    receiptSubmissionGraceSeconds: value(3_600),
+    settlementReviewSlaHours: value(24),
+    settlementReviewResolutionAuthority: value("operator_dual_control"),
     displayModel: value("gpt-5.6-luna"),
     displayTimeoutMs: value(30_000),
     displayOutputCharacterBudget: value(4_000),
@@ -54,6 +58,10 @@ test("a complete versioned production policy activates", () => {
 test("production activation fails closed for every missing required policy", () => {
   for (const key of [
     "auctionWindowSeconds",
+    "creativeRedemptionLeaseSeconds",
+    "receiptSubmissionGraceSeconds",
+    "settlementReviewSlaHours",
+    "settlementReviewResolutionAuthority",
     "payoutMinimumMinor",
     "payoutAddressChangeDelayHours",
     "targetingDeletionDays",
@@ -84,6 +92,16 @@ test("production activation rejects unversioned or mismatched values and missing
     value: "email_link",
   };
   assert.throws(() => validateLaunchPolicy(badRefundProof), /refundAddressVerification/);
+
+  const badSettlementAuthority = policy() as unknown as Record<string, unknown>;
+  badSettlementAuthority.settlementReviewResolutionAuthority = {
+    policyVersion: badSettlementAuthority.version,
+    value: "automated_model",
+  };
+  assert.throws(
+    () => validateLaunchPolicy(badSettlementAuthority),
+    /settlementReviewResolutionAuthority/,
+  );
 });
 
 test("non-production policy may use explicit fixtures without production approvals", () => {
