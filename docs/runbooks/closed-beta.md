@@ -4,7 +4,7 @@
 
 The default mode is synthetic settlement on Tempo Moderato testnet. Production delivery and production funds stay off until all of these records exist:
 
-- written platform approval for sponsored sidebar-session delivery and use of one display turn;
+- a recorded review of the current published host contract and terms, plus a passing exact-version capability probe for the receiver-initiated integration; no separate platform sponsorship approval is required;
 - legal approval for the marketplace, advertising disclosure, promotions, and receiver compensation;
 - custody and data-protection approval;
 - an allowlisted production Tempo chain, USD stablecoin, RPC/indexing path, treasury, and payout signer;
@@ -24,11 +24,14 @@ The operator kill switch pauses new auctions, placement delivery, deposits, payo
 Before each canary:
 
 1. Run the full test, typecheck, lint, build, migration-drift, adapter-contract, and payment-reconciliation suites.
-2. Confirm production-policy versions and approval record IDs.
+2. Confirm production-policy versions and required legal, custody, data-protection, and payment review record IDs.
 3. Confirm the selected token address, chain ID, treasury address, fee payer, and payout-only signer.
 4. Reconcile treasury assets to advertiser liabilities, receiver balances, operator fees, reservations, holds, refunds, and in-flight payouts.
 5. Confirm the fallback creative origin, CSP, reporting controls, and incident contacts.
-6. Send one minimum-value deposit, placement, payout, and refund canary before inviting another account.
+6. Confirm a receiver-device fetch opens or coalesces one opportunity, returns `pending` during bidding, reuses the auction's single winning reservation, and issues one installation-bound claim only after clearance.
+7. Confirm cross-installation replay fails, protected creative redemption and receipt submission require fresh device proof, an unredeemed claim releases its reservation on expiry, and a displayed placement retains its reservation through receipt recovery or settlement review.
+8. Confirm the installed background job can unlock its device key and reach the exact supported host across app restart and sleep/wake before enabling automatic native delivery.
+9. Send one minimum-value deposit, placement, payout, and refund canary before inviting another account.
 
 Any mismatch is a no-go. Switch the affected rail back to synthetic mode; do not edit historical ledger entries.
 
