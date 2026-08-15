@@ -27,6 +27,25 @@ export async function parseBoundedJson(request: Request, limits: RequestLimits):
   return value;
 }
 
+export async function parseBoundedForm(request: Request, limits: RequestLimits): Promise<Record<string, string>> {
+  if (!Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1) throw new Error("maxBytes must be positive");
+  const declared = request.headers.get("content-length");
+  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limits.maxBytes)) throw new RequestLimitError("BODY_TOO_LARGE", `Request body may not exceed ${limits.maxBytes} bytes`);
+  const bytes = await readBoundedBody(request, limits.maxBytes);
+  let decoded: string;
+  try { decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { throw new RequestLimitError("INVALID_FORM", "Request body must be valid UTF-8 form data"); }
+  const entries = [...new URLSearchParams(decoded).entries()];
+  if (entries.length > limits.maxCollectionItems) throw new RequestLimitError("COLLECTION_TOO_LARGE", `Request collection may contain at most ${limits.maxCollectionItems} items`);
+  const result: Record<string, string> = {};
+  for (const [key, value] of entries) {
+    if (key.length > 128 || value.length > (limits.maxStringLength ?? 8_192)) throw new RequestLimitError("STRING_TOO_LONG", "Form field is too long");
+    if (Object.hasOwn(result, key)) throw new RequestLimitError("DUPLICATE_FORM_KEY", "Form keys must be unique");
+    Object.defineProperty(result, key, { value, enumerable: true, configurable: false, writable: false });
+  }
+  return result;
+}
+
 async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array> {
   if (!request.body) return new Uint8Array();
   const reader = request.body.getReader();

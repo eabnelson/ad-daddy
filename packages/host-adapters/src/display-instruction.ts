@@ -18,12 +18,16 @@ export function renderPlacementData(payload: PlacementPayload): string {
         title: payload.title,
         advertiserAuthoredText: payload.creative.body,
         contentReference: payload.contentReference,
+        destinationUrl: payload.destinationUrl,
+        advertiserAuthoredImplementationPrompt:
+          payload.creative.implementationPrompt,
         reward: {
           amount: (payload.payout.amountMinor / 100).toFixed(2),
           currency: payload.payout.currency,
         },
         signalsUsed: payload.signalsUsed,
         supportedAttachmentReferences: payload.creative.attachments,
+        receiverControls: ["Hide", "Block advertiser", "Report"],
       },
       null,
       2,

@@ -6,6 +6,11 @@ export type PlacementValidationCode =
   | "NOT_YET_VALID"
   | "EXPIRED";
 
+export const PLACEMENT_PROTOCOL_VERSION = 1 as const;
+export const MAX_PLACEMENT_BODY_CHARACTERS = 4_000;
+export const MAX_PLACEMENT_ATTACHMENTS = 5;
+export const MAX_PLACEMENT_ATTACHMENT_BYTES = 5_000_000;
+
 export const PLACEMENT_ATTACHMENT_MEDIA_TYPES = [
   "image/png",
   "image/jpeg",
@@ -21,7 +26,7 @@ const PLACEMENT_ATTACHMENT_MEDIA_TYPE_SET = new Set<string>(
 );
 
 export interface PlacementPayload {
-  protocolVersion: 1;
+  protocolVersion: typeof PLACEMENT_PROTOCOL_VERSION;
   placementId: string;
   advertiser: {
     id: string;
@@ -29,6 +34,7 @@ export interface PlacementPayload {
   };
   title: string;
   contentReference: string;
+  destinationUrl?: string;
   disclosure: "Sponsored";
   payout: {
     amountMinor: number;
@@ -37,10 +43,13 @@ export interface PlacementPayload {
   signalsUsed: string[];
   creative: {
     body: string;
+    implementationPrompt?: string;
     attachments: Array<{
       title: string;
       url: string;
       mediaType: PlacementAttachmentMediaType;
+      sizeBytes?: number;
+      sha256?: string;
     }>;
   };
   issuedAt: string;
@@ -128,6 +137,9 @@ export function validateSignedPlacement(
 function validatePayloadShape(placement: SignedPlacement): void {
   const payload = placement?.payload;
   const contentReference = safeUrl(payload?.contentReference);
+  const destinationUrl = payload?.destinationUrl === undefined
+    ? null
+    : safeUrl(payload.destinationUrl);
   const attachments = payload?.creative?.attachments;
   const issuedAt = Date.parse(payload?.issuedAt);
   const expiresAt = Date.parse(payload?.expiresAt);
@@ -136,12 +148,13 @@ function validatePayloadShape(placement: SignedPlacement): void {
     placement?.algorithm === "Ed25519" &&
     bounded(placement.keyId, 1, 128) &&
     bounded(placement.signature, 32, 256) &&
-    payload?.protocolVersion === 1 &&
+    payload?.protocolVersion === PLACEMENT_PROTOCOL_VERSION &&
     bounded(payload.placementId, 1, 128) &&
     bounded(payload.advertiser?.id, 1, 128) &&
     bounded(payload.advertiser?.displayName, 1, 80) &&
     bounded(payload.title, 1, 120) &&
     contentReference?.protocol === "https:" &&
+    (payload.destinationUrl === undefined || destinationUrl?.protocol === "https:") &&
     payload.disclosure === "Sponsored" &&
     Number.isSafeInteger(payload.payout?.amountMinor) &&
     payload.payout.amountMinor >= 0 &&
@@ -149,15 +162,22 @@ function validatePayloadShape(placement: SignedPlacement): void {
     Array.isArray(payload.signalsUsed) &&
     payload.signalsUsed.length <= 20 &&
     payload.signalsUsed.every((signal) => bounded(signal, 1, 80)) &&
-    bounded(payload.creative?.body, 1, 4_000) &&
+    bounded(payload.creative?.body, 1, MAX_PLACEMENT_BODY_CHARACTERS) &&
+    (payload.creative?.implementationPrompt === undefined ||
+      bounded(payload.creative.implementationPrompt, 1, 2_000)) &&
     Array.isArray(attachments) &&
-    attachments.length <= 5 &&
+    attachments.length <= MAX_PLACEMENT_ATTACHMENTS &&
     attachments.every((attachment) => {
       const url = safeUrl(attachment?.url);
       return (
         bounded(attachment?.title, 1, 120) &&
         url?.protocol === "https:" &&
-        PLACEMENT_ATTACHMENT_MEDIA_TYPE_SET.has(attachment?.mediaType)
+        PLACEMENT_ATTACHMENT_MEDIA_TYPE_SET.has(attachment?.mediaType) &&
+        (attachment.sizeBytes === undefined ||
+          (Number.isSafeInteger(attachment.sizeBytes) &&
+            attachment.sizeBytes > 0 &&
+            attachment.sizeBytes <= MAX_PLACEMENT_ATTACHMENT_BYTES)) &&
+        (attachment.sha256 === undefined || /^[a-f0-9]{64}$/.test(attachment.sha256))
       );
     }) &&
     Number.isFinite(issuedAt) &&
@@ -168,6 +188,30 @@ function validatePayloadShape(placement: SignedPlacement): void {
     throw new PlacementValidationError(
       "INVALID_PAYLOAD",
       "Placement payload does not match the bounded v1 contract.",
+    );
+  }
+
+
+  assertExactKeys(placement, ["algorithm", "keyId", "payload", "signature"]);
+  assertExactKeys(payload, [
+    "protocolVersion", "placementId", "advertiser", "title",
+    "contentReference", "destinationUrl", "disclosure", "payout",
+    "signalsUsed", "creative", "issuedAt", "expiresAt",
+  ]);
+  assertExactKeys(payload.advertiser, ["id", "displayName"]);
+  assertExactKeys(payload.payout, ["amountMinor", "currency"]);
+  assertExactKeys(payload.creative, ["body", "implementationPrompt", "attachments"]);
+  for (const attachment of attachments) {
+    assertExactKeys(attachment, ["title", "url", "mediaType", "sizeBytes", "sha256"]);
+  }
+}
+
+function assertExactKeys(value: object, allowed: readonly string[]): void {
+  const allowedSet = new Set(allowed);
+  if (Object.keys(value).some((key) => !allowedSet.has(key))) {
+    throw new PlacementValidationError(
+      "INVALID_PAYLOAD",
+      "Placement payload contains an unsupported field.",
     );
   }
 }

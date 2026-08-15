@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseBoundedJson, RequestLimitError } from "../../lib/http/request-limits.ts";
+import { parseBoundedForm, parseBoundedJson, RequestLimitError } from "../../lib/http/request-limits.ts";
 import { FixedWindowRateLimiter } from "../../lib/http/rate-limit.ts";
 
 test("bounded JSON rejects declared and actual oversized bodies and collections", async () => {
@@ -37,4 +37,14 @@ test("chunked bodies stop at the byte limit and expired rate buckets are evicted
   assert.equal(limiter.trackedBucketCount, 255);
   limiter.check(["current"], new Date(2));
   assert.equal(limiter.trackedBucketCount, 1);
+});
+
+test("bounded forms accept one small action and reject duplicate or oversized fields", async () => {
+  const parsed = await parseBoundedForm(new Request("https://example.test", {
+    method: "POST", body: "action=report", headers: { "content-type": "application/x-www-form-urlencoded" },
+  }), { maxBytes: 32, maxCollectionItems: 2, maxStringLength: 16 });
+  assert.deepEqual(parsed, { action: "report" });
+  await assert.rejects(parseBoundedForm(new Request("https://example.test", {
+    method: "POST", body: "action=hide&action=report",
+  }), { maxBytes: 64, maxCollectionItems: 2, maxStringLength: 16 }), /unique/);
 });

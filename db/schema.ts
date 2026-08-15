@@ -341,6 +341,14 @@ export const placements = sqliteTable("placements", {
   currency: text("currency").notNull(),
   hostSessionId: text("host_session_id"),
   hostTurnId: text("host_turn_id"),
+  hostKind: text("host_kind", { enum: ["codex", "claude", "signed-html"] }),
+  deliveryStatus: text("delivery_status", { enum: ["verifying", "ready", "displaying", "delivered", "fallback", "expired", "blocked", "reported"] }).notNull().default("verifying"),
+  signedPlacementJson: text("signed_placement_json"),
+  renderedResponse: text("rendered_response"),
+  renderedResponseSha256: text("rendered_response_sha256"),
+  hostReceiptJson: text("host_receipt_json"),
+  creativeRetentionExpiresAt: text("creative_retention_expires_at"),
+  reportedAt: text("reported_at"),
   createdAt: createdAt(),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [
@@ -348,6 +356,20 @@ export const placements = sqliteTable("placements", {
   uniqueIndex("placement_idempotency_unique").on(table.idempotencyKey),
   check("placement_amounts_nonnegative", sql`${table.grossAmountMinor} >= 0 AND ${table.receiverAmountMinor} >= 0 AND ${table.operatorAmountMinor} >= 0`),
   check("placement_split_balanced", sql`${table.receiverAmountMinor} + ${table.operatorAmountMinor} = ${table.grossAmountMinor}`),
+]);
+
+export const placementMeasurementEvents = sqliteTable("placement_measurement_events", {
+  id: text("id").primaryKey(),
+  placementId: text("placement_id").notNull().references(() => placements.id),
+  eventType: text("event_type", { enum: ["session_created", "session_open", "creative_engagement", "approved_action", "verified_conversion"] }).notNull(),
+  evidenceStatus: text("evidence_status", { enum: ["verified", "unavailable", "rejected"] }).notNull(),
+  evidenceProvider: text("evidence_provider"),
+  evidenceId: text("evidence_id"),
+  occurredAt: text("occurred_at").notNull(),
+  receivedAt: createdAt(),
+}, (table) => [
+  uniqueIndex("placement_measurement_evidence_unique").on(table.placementId, table.eventType, table.evidenceId),
+  index("placement_measurement_time_idx").on(table.placementId, table.occurredAt),
 ]);
 
 export const idempotencyRecords = sqliteTable("idempotency_records", {

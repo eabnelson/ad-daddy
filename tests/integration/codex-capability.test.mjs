@@ -71,6 +71,20 @@ test("rejects an expired placement", () => {
   );
 });
 
+test("rejects unsupported fields and unsafe URL schemes before signature work", () => {
+  const unknownField = structuredClone(SIGNED_PLACEMENT_FIXTURE);
+  unknownField.payload.creative.trackingPixel = "https://example.invalid/pixel";
+  const unsafeUrl = structuredClone(SIGNED_PLACEMENT_FIXTURE);
+  unsafeUrl.payload.contentReference = "javascript:alert(1)";
+
+  for (const placement of [unknownField, unsafeUrl]) {
+    assert.throws(
+      () => validateSignedPlacement(placement, TEST_MARKETPLACE_PUBLIC_KEY_PEM, NOW),
+      (error) => error instanceof PlacementValidationError && error.code === "INVALID_PAYLOAD",
+    );
+  }
+});
+
 test("the immutable display instruction labels sponsorship and forbids actions", () => {
   assert.match(SPONSORED_DISPLAY_INSTRUCTION, /Sponsored via Ad Daddy/);
   assert.match(SPONSORED_DISPLAY_INSTRUCTION, /advertiser fields.*data/i);
@@ -141,6 +155,10 @@ test("a valid placement creates one isolated display turn and returns a receipt"
   assert.equal(result.receipt.restartReadable, true);
   assert.equal(result.receipt.sidebarVerified, true);
   assert.match(result.receipt.output, /Sponsored via Ad Daddy/);
+  assert.match(result.receipt.outputSha256, /^[a-f0-9]{64}$/);
+  assert.equal(result.receipt.advertiserDisplayName, "Neon");
+  assert.equal(result.receipt.receiverAmountMinor, 500);
+  assert.deepEqual(result.receipt.signalsUsed, ["TypeScript", "database integration"]);
   assert.equal(host.threadStartCalls.length, 1);
   assert.equal(host.turnStartCalls.length, 1);
   assert.equal(host.turnStartCalls[0].cwd, "/tmp/ad-daddy-empty");
@@ -179,7 +197,9 @@ test("invalid and expired placements create no host state", async () => {
 });
 
 test("prompt-injection creative stays quoted data and cannot cause a tool item", async () => {
-  const host = new FakeAppServerHost();
+  const host = new FakeAppServerHost({
+    output: "Sponsored via Ad Daddy\nNeon — Prompt boundary test\nReward: $5.00\nMatched: TypeScript, database integration.",
+  });
   const result = await deliverCodexPlacement({
     ...deliveryOptions(host),
     placement: PROMPT_INJECTION_PLACEMENT_FIXTURE,
@@ -241,6 +261,44 @@ test("retrying a placement ID returns the same task without another turn", async
   assert.equal(first.delivered, true);
   assert.equal(second.delivered, true);
   assert.equal(second.receipt.threadId, first.receipt.threadId);
+  assert.equal(host.threadStartCalls.length, 1);
+  assert.equal(host.turnStartCalls.length, 1);
+});
+
+test("persists host identifiers before delivery finishes and retries by direct mapping", async () => {
+  const host = new FakeAppServerHost();
+  const identifiers = [];
+  const first = await deliverCodexPlacement({
+    ...deliveryOptions(host),
+    onHostIdentifiers: async (value) => identifiers.push(structuredClone(value)),
+  });
+  assert.equal(first.delivered, true);
+  assert.equal(identifiers.length, 1);
+  assert.equal(identifiers[0].threadId, first.receipt.threadId);
+  assert.equal(identifiers[0].turnId, first.receipt.turnId);
+
+  const retry = await deliverCodexPlacement({
+    ...deliveryOptions(host),
+    existingHostIdentifiers: identifiers[0],
+  });
+  assert.equal(retry.delivered, true);
+  assert.equal(retry.receipt.threadId, first.receipt.threadId);
+  assert.equal(host.threadStartCalls.length, 1);
+  assert.equal(host.turnStartCalls.length, 1);
+});
+
+test("an ambiguous persistence failure recovers the completed task without duplicating it", async () => {
+  const host = new FakeAppServerHost();
+  const first = await deliverCodexPlacement({
+    ...deliveryOptions(host),
+    onHostIdentifiers: async () => { throw new Error("simulated receipt store outage"); },
+  });
+  assert.equal(first.delivered, false);
+  assert.equal(first.code, "TURN_FAILED");
+  await new Promise((resolve) => queueMicrotask(resolve));
+
+  const retry = await deliverCodexPlacement(deliveryOptions(host));
+  assert.equal(retry.delivered, true);
   assert.equal(host.threadStartCalls.length, 1);
   assert.equal(host.turnStartCalls.length, 1);
 });
@@ -376,7 +434,7 @@ class FakeAppServerHost {
             if (this.#options.neverComplete) return;
             const text =
               this.#options.output ??
-              "Sponsored via Ad Daddy\nNeon offers serverless Postgres. Reward: $5.00.";
+              "Sponsored via Ad Daddy\nNeon — Add Postgres without leaving Codex\nNeon offers serverless Postgres. Reward: $5.00.\nMatched: TypeScript, database integration.";
             const item = {
               type: "agentMessage",
               id: "answer-1",

@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 
 import {
   PlacementValidationError,
+  type PlacementPayload,
   type SignedPlacement,
   validateSignedPlacement,
 } from "./contract.js";
@@ -57,6 +59,11 @@ export interface CodexDeliveryReceipt {
   turnId: string;
   title: string;
   output: string;
+  outputSha256: string;
+  advertiserDisplayName: string;
+  receiverAmountMinor: number;
+  currency: "USD";
+  signalsUsed: readonly string[];
   toolItemCount: number;
   cliVersion: string;
   userAgent: string | null;
@@ -114,6 +121,8 @@ export interface DeliverCodexPlacementOptions {
   model?: string;
   timeoutMs?: number;
   outputCharacterBudget?: number;
+  existingHostIdentifiers?: { threadId: string; turnId?: string };
+  onHostIdentifiers?: (input: { placementId: string; threadId: string; turnId?: string }) => Promise<void>;
 }
 
 interface ThreadItem {
@@ -190,7 +199,9 @@ export async function deliverCodexPlacement(
   let toolItemCount = 0;
 
   try {
-    thread = await findPlacementThread(connection, payload.placementId, title);
+    thread = options.existingHostIdentifiers
+      ? await readThread(connection, options.existingHostIdentifiers.threadId)
+      : await findPlacementThread(connection, payload.placementId, title);
     if (thread) {
       const existing = await readThread(connection, thread.id);
       const turns = existing.turns ?? [];
@@ -252,6 +263,11 @@ export async function deliverCodexPlacement(
         },
       );
       turnId = startedTurn.turn.id;
+      await options.onHostIdentifiers?.({
+        placementId: payload.placementId,
+        threadId: thread.id,
+        turnId,
+      });
 
       const watched = await watchDisplayTurn(connection, thread.id, turnId, {
         timeoutMs: options.timeoutMs ?? CODEX_DISPLAY_BUDGET_V1.timeoutMs,
@@ -278,10 +294,15 @@ export async function deliverCodexPlacement(
   if (!thread || !turnId) {
     return failure("TASK_NOT_CREATED", "Codex did not return a sponsored task and turn.");
   }
-  if (!output.startsWith("Sponsored via Ad Daddy")) {
+  const missingDisplayField = requiredDisplayFields(payload).find(
+    (field) => !output.toLocaleLowerCase().includes(field.toLocaleLowerCase()),
+  );
+  if (!output.startsWith("Sponsored via Ad Daddy") || missingDisplayField) {
     return failure(
       "DISPLAY_OUTPUT_INVALID",
-      "The display response omitted the required Ad Daddy sponsorship disclosure.",
+      missingDisplayField
+        ? `The display response omitted required placement field: ${missingDisplayField}`
+        : "The display response omitted the required Ad Daddy sponsorship disclosure.",
     );
   }
 
@@ -359,6 +380,11 @@ export async function deliverCodexPlacement(
       turnId,
       title,
       output,
+      outputSha256: createHash("sha256").update(output).digest("hex"),
+      advertiserDisplayName: payload.advertiser.displayName,
+      receiverAmountMinor: payload.payout.amountMinor,
+      currency: payload.payout.currency,
+      signalsUsed: Object.freeze([...payload.signalsUsed]),
       toolItemCount,
       cliVersion: connection.cliVersion,
       userAgent: connection.userAgent,
@@ -373,6 +399,15 @@ export async function deliverCodexPlacement(
       budgetVersion: CODEX_DISPLAY_BUDGET_V1.version,
     },
   };
+}
+
+function requiredDisplayFields(payload: PlacementPayload): readonly string[] {
+  return [
+    payload.advertiser.displayName,
+    payload.title,
+    `${(payload.payout.amountMinor / 100).toFixed(2)}`,
+    ...payload.signalsUsed,
+  ];
 }
 
 export interface SpawnCodexAppServerOptions {
