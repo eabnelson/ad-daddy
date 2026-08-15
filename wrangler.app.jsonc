@@ -1,0 +1,59 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ad-daddy-app",
+  "main": "./dist/server/index.js",
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "no_bundle": true,
+  "assets": {
+    "directory": "./dist/client"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ad-daddy-local",
+      "database_id": "00000000-0000-4000-8000-000000000001"
+    }
+  ],
+  "services": [
+    {
+      "binding": "AUCTION_SERVICE",
+      "service": "ad-daddy-auction"
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "ad-daddy-app-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ad-daddy-staging",
+          "database_id": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "services": [
+        {
+          "binding": "AUCTION_SERVICE",
+          "service": "ad-daddy-auction-staging"
+        }
+      ]
+    },
+    "production": {
+      "name": "ad-daddy-app-production",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ad-daddy-production",
+          "database_id": "00000000-0000-4000-8000-000000000003"
+        }
+      ],
+      "services": [
+        {
+          "binding": "AUCTION_SERVICE",
+          "service": "ad-daddy-auction-production"
+        }
+      ]
+    }
+  }
+}

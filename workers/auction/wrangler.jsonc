@@ -1,0 +1,66 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "ad-daddy-auction",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ad-daddy-local",
+      "database_id": "00000000-0000-4000-8000-000000000001"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUCTION_OBJECT",
+        "class_name": "AuctionObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AuctionObject"]
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "ad-daddy-auction-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ad-daddy-staging",
+          "database_id": "00000000-0000-4000-8000-000000000002"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "AUCTION_OBJECT",
+            "class_name": "AuctionObject"
+          }
+        ]
+      }
+    },
+    "production": {
+      "name": "ad-daddy-auction-production",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ad-daddy-production",
+          "database_id": "00000000-0000-4000-8000-000000000003"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "AUCTION_OBJECT",
+            "class_name": "AuctionObject"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,2 @@
+export const HOST_ADAPTER_PROTOCOL_VERSION = 1;
+

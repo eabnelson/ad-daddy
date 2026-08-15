@@ -3,6 +3,7 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 
 interface Env {
+  AUCTION_SERVICE: Fetcher;
   ASSETS: Fetcher;
   DB: D1Database;
   IMAGES: {
