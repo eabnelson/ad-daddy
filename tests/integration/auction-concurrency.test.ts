@@ -199,3 +199,43 @@ test("bid throttles reject before token spend mutation or auction work", async (
   assert.equal(authorizedSpends, 1);
   assert.equal(forwardedBids, 1);
 });
+
+test("a rejected or failed auction forward releases a newly reserved token spend", async () => {
+  let reserved = false;
+  let releases = 0;
+  let attempts = 0;
+  const runtime = {
+    opportunityRateLimit: new FixedWindowRateLimiter({ limit: 10, windowMs: 60_000, maxRetryAfterSeconds: 60 }),
+    campaigns: { get: async () => ({ accountId: "account", status: "active" }) },
+    tokens: {
+      authorize: async () => ({ claims: {} }),
+      authorizeVerifiedSpend: () => {
+        if (reserved) throw new Error("Campaign token spend ceiling exceeded");
+        reserved = true;
+        return { newlyAuthorized: true };
+      },
+      commitVerifiedSpend: () => undefined,
+      releaseVerifiedSpend: () => { reserved = false; releases += 1; },
+    },
+  } as never;
+  const handler = createBidHandler({
+    bid: async () => {
+      attempts += 1;
+      if (attempts === 1) return Response.json({ error: "auction_unavailable" }, { status: 503 });
+      return Response.json({ accepted: true });
+    },
+  } as never, runtime);
+  const request = (bidId: string) => new Request("https://ad.daddy/api/v1/auctions/auction/bids", {
+    method: "POST",
+    headers: { authorization: "Bearer token", "cf-connecting-ip": "127.0.0.1" },
+    body: JSON.stringify({
+      accountId: "account", campaignId: "campaign",
+      bid: { bidId, campaignId: "campaign", grossMinor: 400, rewardLane: "stablecoin", submittedAt },
+    }),
+  });
+  const context = { params: Promise.resolve({ id: "auction" }) };
+
+  assert.equal((await handler(request("bid_failed"), context)).status, 503);
+  assert.equal(releases, 1);
+  assert.equal((await handler(request("bid_retry"), context)).status, 200);
+});

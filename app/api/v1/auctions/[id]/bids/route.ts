@@ -43,16 +43,29 @@ export function createBidHandler(
       if (!authenticatedLimit.allowed) return rateLimited(authenticatedLimit.retryAfterSeconds);
       const campaign = await runtime.campaigns.get(body.campaignId);
       if (campaign.accountId !== body.accountId || campaign.status !== "active") return json(403, { error: "active_owned_campaign_required" });
+      const spendKey = `auction:${auctionId}:bid:${body.bid.bidId}`;
+      let newlyAuthorizedSpend = false;
       if (body.bid.grossMinor > 0) {
-        runtime.tokens.authorizeVerifiedSpend(verified, {
+        const spend = runtime.tokens.authorizeVerifiedSpend(verified, {
           accountId: body.accountId,
           campaignId: body.campaignId,
           amountMinor: body.bid.grossMinor,
           bidMinor: body.bid.grossMinor,
-          idempotencyKey: `auction:${auctionId}:bid:${body.bid.bidId}`,
+          idempotencyKey: spendKey,
         });
+        newlyAuthorizedSpend = spend.newlyAuthorized;
       }
-      return gateway.bid(auctionId, body.bid);
+      try {
+        const response = await gateway.bid(auctionId, body.bid);
+        if (newlyAuthorizedSpend) {
+          if (response.ok) runtime.tokens.commitVerifiedSpend(verified, spendKey);
+          else runtime.tokens.releaseVerifiedSpend(verified, spendKey);
+        }
+        return response;
+      } catch (error) {
+        if (newlyAuthorizedSpend) runtime.tokens.releaseVerifiedSpend(verified, spendKey);
+        throw error;
+      }
     } catch (error) {
       return json(403, { error: "bid_rejected", message: boundedMessage(error) });
     }

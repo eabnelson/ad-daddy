@@ -12,11 +12,17 @@ export interface CampaignTokenClaims {
 }
 
 export interface VerifiedCampaignAuthorization { readonly claims: CampaignTokenClaims; }
+interface SpendAuthorizationResult {
+  claims: CampaignTokenClaims;
+  authorizedMinor: number;
+  remainingMinor: number;
+  newlyAuthorized: boolean;
+}
 
 export class CampaignTokenService {
   readonly #secret: Uint8Array;
   readonly #revoked = new Map<string, number>();
-  readonly #spend = new Map<string, { usedMinor: number; expiresAt: number; idempotency: Map<string, number> }>();
+  readonly #spend = new Map<string, { usedMinor: number; expiresAt: number; idempotency: Map<string, { amountMinor: number; committed: boolean }> }>();
   readonly #expiries = new Map<string, number>();
   readonly #verified = new WeakSet<VerifiedCampaignAuthorization>();
   #key?: Promise<CryptoKey>;
@@ -95,7 +101,7 @@ export class CampaignTokenService {
     token: string,
     request: { accountId: string; campaignId: string; amountMinor: number; bidMinor: number; idempotencyKey: string },
     now = new Date(),
-  ): Promise<{ claims: CampaignTokenClaims; authorizedMinor: number; remainingMinor: number }> {
+  ): Promise<SpendAuthorizationResult> {
     const authorization = await this.authorize(token, {
       accountId: request.accountId,
       campaignId: request.campaignId,
@@ -110,7 +116,7 @@ export class CampaignTokenService {
     authorization: VerifiedCampaignAuthorization,
     request: { accountId: string; campaignId: string; amountMinor: number; bidMinor: number; idempotencyKey: string },
     now = new Date(),
-  ): { claims: CampaignTokenClaims; authorizedMinor: number; remainingMinor: number } {
+  ): SpendAuthorizationResult {
     if (!this.#verified.has(authorization)) throw new Error("Campaign token authorization context is invalid");
     if (!Number.isSafeInteger(request.amountMinor) || request.amountMinor < 1 || !Number.isSafeInteger(request.bidMinor) || request.bidMinor < 0 || !request.idempotencyKey || request.idempotencyKey.length > 256) throw new Error("Campaign token spend request is invalid");
     const claims = authorization.claims;
@@ -119,17 +125,38 @@ export class CampaignTokenService {
     if (claims.accountId !== request.accountId || claims.campaignId !== request.campaignId || !claims.scopes.includes("bid:submit")) throw new Error("Campaign token authorization context does not match the spend request");
     if (request.amountMinor > claims.spendCeilingMinor || request.bidMinor > claims.bidCeilingMinor) throw new Error("Campaign token spend ceiling exceeded");
     const expiresAt = Date.parse(claims.expiresAt);
-    const state = this.#spend.get(claims.tokenId) ?? { usedMinor: 0, expiresAt, idempotency: new Map<string, number>() };
+    const state = this.#spend.get(claims.tokenId) ?? { usedMinor: 0, expiresAt, idempotency: new Map<string, { amountMinor: number; committed: boolean }>() };
     const existing = state.idempotency.get(request.idempotencyKey);
     if (existing !== undefined) {
-      if (existing !== request.amountMinor) throw new Error("Campaign token spend idempotency collision");
-      return { claims, authorizedMinor: existing, remainingMinor: claims.spendCeilingMinor - state.usedMinor };
+      if (existing.amountMinor !== request.amountMinor) throw new Error("Campaign token spend idempotency collision");
+      return { claims, authorizedMinor: existing.amountMinor, remainingMinor: claims.spendCeilingMinor - state.usedMinor, newlyAuthorized: false };
     }
     if (state.usedMinor + request.amountMinor > claims.spendCeilingMinor) throw new Error("Campaign token spend ceiling exceeded");
     state.usedMinor += request.amountMinor;
-    state.idempotency.set(request.idempotencyKey, request.amountMinor);
+    state.idempotency.set(request.idempotencyKey, { amountMinor: request.amountMinor, committed: false });
     this.#spend.set(claims.tokenId, state);
-    return { claims, authorizedMinor: request.amountMinor, remainingMinor: claims.spendCeilingMinor - state.usedMinor };
+    return { claims, authorizedMinor: request.amountMinor, remainingMinor: claims.spendCeilingMinor - state.usedMinor, newlyAuthorized: true };
+  }
+
+  commitVerifiedSpend(authorization: VerifiedCampaignAuthorization, idempotencyKey: string): void {
+    const entry = this.spendEntry(authorization, idempotencyKey);
+    if (entry) entry.committed = true;
+  }
+
+  releaseVerifiedSpend(authorization: VerifiedCampaignAuthorization, idempotencyKey: string): void {
+    const claims = authorization.claims;
+    const entry = this.spendEntry(authorization, idempotencyKey);
+    if (!entry || entry.committed) return;
+    const state = this.#spend.get(claims.tokenId)!;
+    state.usedMinor -= entry.amountMinor;
+    state.idempotency.delete(idempotencyKey);
+    if (state.idempotency.size === 0) this.#spend.delete(claims.tokenId);
+  }
+
+  private spendEntry(authorization: VerifiedCampaignAuthorization, idempotencyKey: string) {
+    if (!this.#verified.has(authorization)) throw new Error("Campaign token authorization context is invalid");
+    if (!idempotencyKey || idempotencyKey.length > 256) throw new Error("Campaign token spend request is invalid");
+    return this.#spend.get(authorization.claims.tokenId)?.idempotency.get(idempotencyKey);
   }
 
   private async sign(payload: string): Promise<string> {

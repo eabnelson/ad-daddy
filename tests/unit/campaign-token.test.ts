@@ -46,3 +46,30 @@ test("spend authorization accepts only contexts produced by the token service", 
     accountId: "acct_1", campaignId: "campaign_1", amountMinor: 1, bidMinor: 1, idempotencyKey: "forged",
   }, now), /context is invalid/i);
 });
+
+test("unforwarded bid reservations release token spend while accepted bids remain committed", async () => {
+  const tokens = new CampaignTokenService("test-secret-with-at-least-32-characters");
+  const token = await tokens.issue({
+    tokenId: "token_release", accountId: "acct_1", campaignId: "campaign_1",
+    scopes: ["bid:submit"], spendCeilingMinor: 500, bidCeilingMinor: 500,
+    expiresAt: "2026-08-15T16:05:00.000Z",
+  }, now);
+  const authorization = await tokens.authorize(token, {
+    accountId: "acct_1", campaignId: "campaign_1", scope: "bid:submit", requestedBidMinor: 500,
+  }, now);
+  const failed = tokens.authorizeVerifiedSpend(authorization, {
+    accountId: "acct_1", campaignId: "campaign_1", amountMinor: 500, bidMinor: 500, idempotencyKey: "failed",
+  }, now);
+  assert.equal(failed.newlyAuthorized, true);
+  tokens.releaseVerifiedSpend(authorization, "failed");
+
+  const accepted = tokens.authorizeVerifiedSpend(authorization, {
+    accountId: "acct_1", campaignId: "campaign_1", amountMinor: 500, bidMinor: 500, idempotencyKey: "accepted",
+  }, now);
+  tokens.commitVerifiedSpend(authorization, "accepted");
+  tokens.releaseVerifiedSpend(authorization, "accepted");
+  assert.equal(accepted.remainingMinor, 0);
+  assert.throws(() => tokens.authorizeVerifiedSpend(authorization, {
+    accountId: "acct_1", campaignId: "campaign_1", amountMinor: 1, bidMinor: 1, idempotencyKey: "after_commit",
+  }, now), /spend ceiling/i);
+});
