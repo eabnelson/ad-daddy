@@ -121,8 +121,19 @@ export interface DeliverCodexPlacementOptions {
   model?: string;
   timeoutMs?: number;
   outputCharacterBudget?: number;
-  existingHostIdentifiers?: { threadId: string; turnId?: string };
-  onHostIdentifiers?: (input: { placementId: string; threadId: string; turnId?: string }) => Promise<void>;
+  existingHostIdentifiers?: {
+    threadId: string;
+    turnId?: string;
+    instructionSourcesVerified?: boolean;
+    instructionSources?: string[];
+  };
+  onHostIdentifiers?: (input: {
+    placementId: string;
+    threadId: string;
+    turnId?: string;
+    instructionSourcesVerified?: boolean;
+    instructionSources?: string[];
+  }) => Promise<void>;
 }
 
 interface ThreadItem {
@@ -202,31 +213,57 @@ export async function deliverCodexPlacement(
     thread = options.existingHostIdentifiers
       ? await readThread(connection, options.existingHostIdentifiers.threadId)
       : await findPlacementThread(connection, payload.placementId, title);
+    let needsDisplayTurn = false;
     if (thread) {
       const existing = await readThread(connection, thread.id);
       const turns = existing.turns ?? [];
-      if (turns.length !== 1 || turns[0]?.status !== "completed") {
+      if (turns.length === 0) {
+        if (!options.existingHostIdentifiers?.instructionSourcesVerified) {
+          return failure(
+            "EXISTING_TURN_INCOMPLETE",
+            "The placement owns an empty task whose instruction isolation was not durably verified; retry will not create a second task or start a turn.",
+          );
+        }
+        const persistedSources =
+          options.existingHostIdentifiers.instructionSources ?? [];
+        if (persistedSources.length > 0) {
+          return failure(
+            "INSTRUCTION_SOURCE_LEAK",
+            `Codex loaded unexpected instruction files into the dedicated sponsored task: ${persistedSources.join(", ")}`,
+          );
+        }
+        // A prior attempt can fail after thread/start but before turn/start. The
+        // caller-owned mapping makes that empty task recoverable without
+        // creating a second sponsored task.
+        thread = existing;
+        needsDisplayTurn = true;
+      } else if (turns.length !== 1 || turns[0]?.status !== "completed") {
         return failure(
           "EXISTING_TURN_INCOMPLETE",
           "The placement already owns a task whose single display turn did not complete; retry will not start a second turn.",
         );
       }
-      const inspected = inspectTurn(turns[0]);
-      if (inspected.toolItemCount > 0) {
-        return failure(
-          "TOOL_ITEM_EMITTED",
-          "The existing sponsored display turn contains a forbidden tool item.",
-        );
+      if (!needsDisplayTurn) {
+        const inspected = inspectTurn(turns[0]!);
+        if (inspected.toolItemCount > 0) {
+          return failure(
+            "TOOL_ITEM_EMITTED",
+            "The existing sponsored display turn contains a forbidden tool item.",
+          );
+        }
+        turnId = turns[0]!.id;
+        output = inspected.output;
+        toolItemCount = inspected.toolItemCount;
       }
-      turnId = turns[0].id;
-      output = inspected.output;
-      toolItemCount = inspected.toolItemCount;
     } else {
       const started = await connection.request<{
         thread: ThreadRecord;
         instructionSources?: string[];
       }>("thread/start", {
         cwd: options.isolatedCwd,
+        runtimeWorkspaceRoots: [],
+        environments: [],
+        dynamicTools: [],
         approvalPolicy: "never",
         sandbox: "read-only",
         ephemeral: false,
@@ -236,17 +273,38 @@ export async function deliverCodexPlacement(
         config: toolFreeConfig(),
       });
       thread = started.thread;
+      // Persist the task as soon as the host creates it. Every operation below
+      // this line can fail, and a zero-turn task has no placement marker for
+      // discovery through thread/list.
+      try {
+        await options.onHostIdentifiers?.({
+          placementId: payload.placementId,
+          threadId: thread.id,
+        });
+      } catch (error) {
+        await safelyArchive(connection, thread.id);
+        throw error;
+      }
       instructionSources = started.instructionSources ?? [];
       unexpectedInstructionSources = instructionSources.filter(
         (source) => !connection.allowedInstructionSources?.includes(source),
       );
+      await options.onHostIdentifiers?.({
+        placementId: payload.placementId,
+        threadId: thread.id,
+        instructionSourcesVerified: true,
+        instructionSources: unexpectedInstructionSources,
+      });
       if (unexpectedInstructionSources.length > 0) {
         return failure(
           "INSTRUCTION_SOURCE_LEAK",
           `Codex loaded unexpected instruction files into the dedicated sponsored task: ${unexpectedInstructionSources.join(", ")}`,
         );
       }
+      needsDisplayTurn = true;
+    }
 
+    if (needsDisplayTurn && thread) {
       await connection.request("thread/name/set", {
         threadId: thread.id,
         name: title,
@@ -257,6 +315,8 @@ export async function deliverCodexPlacement(
           threadId: thread.id,
           input: [{ type: "text", text: renderPlacementData(payload) }],
           cwd: options.isolatedCwd,
+          runtimeWorkspaceRoots: [],
+          environments: [],
           approvalPolicy: "never",
           sandboxPolicy: { type: "readOnly", networkAccess: false },
           model: options.model,
@@ -662,6 +722,8 @@ function toolFreeConfig(): Record<string, unknown> {
     project_doc_max_bytes: 0,
     project_doc_fallback_filenames: [],
     mcp_servers: {},
+    tools: { web_search: null },
+    web_search: "disabled",
     apps: { _default: { enabled: false } },
     features: Object.fromEntries(
       DISABLED_CODEX_FEATURES.map((feature) => [feature, false]),
@@ -678,6 +740,18 @@ async function safelyInterrupt(
     await connection.request("turn/interrupt", { threadId, turnId });
   } catch {
     // Delivery already fails closed; interruption is best-effort after host failure.
+  }
+}
+
+async function safelyArchive(
+  connection: CodexAppServerConnection,
+  threadId: string,
+): Promise<void> {
+  try {
+    await connection.request("thread/archive", { threadId });
+  } catch {
+    // If durable identifier persistence fails, hiding the orphaned zero-turn
+    // task is best-effort. Delivery still fails closed and yields no receipt.
   }
 }
 

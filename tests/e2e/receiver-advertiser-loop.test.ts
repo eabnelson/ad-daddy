@@ -5,7 +5,7 @@ import test from "node:test";
 import { CampaignService, MemoryBrandVerificationRepository, MemoryCampaignRepository, ADVERTISER_TERMS_VERSION, type CampaignApproval, type CampaignDraft } from "@ad-daddy/cli/campaign";
 import { buildPublishedProfile } from "@ad-daddy/cli";
 import { createPlacementHistoryHandler } from "../../app/api/v1/placements/route.ts";
-import { createReportHandler } from "../../app/api/v1/reports/route.ts";
+import { createCampaignReportAuthority, createReportHandler } from "../../app/api/v1/reports/route.ts";
 import { CredentialLifecycleService } from "../../lib/auth/credential-lifecycle.ts";
 import { AttributionService, ConversionEvidenceVerifier } from "../../lib/marketplace/attribution.ts";
 import { AuctionService } from "../../lib/marketplace/auction.ts";
@@ -117,8 +117,12 @@ test("seeded receiver and advertiser agents clear an auction, create one sponsor
   assert.equal(historyBody.placements[0].bidderCount, 2);
   assert.equal(historyBody.placements[0].economics.receiverAmountMinor, 500);
 
-  const reports = await createReportHandler(placementRepository, new LifecycleEventStore())(new Request("https://ad-daddy.test/api/v1/reports", {
-    headers: { "oai-authenticated-user-id": "advertiser_1", "oai-advertiser-owner-id": "advertiser_1", "oai-advertiser-id": "adv_neon" },
+  const reports = await createReportHandler(
+    placementRepository,
+    new LifecycleEventStore(),
+    createCampaignReportAuthority({ campaigns, brandVerifications: brands }, []),
+  )(new Request("https://ad-daddy.test/api/v1/reports?campaignId=campaign_neon", {
+    headers: { "oai-authenticated-user-id": "advertiser_1" },
   }));
   const reportBody = await reports.json() as { placements: Array<{ renderedResponse: string; measurement: { sessionOpen: string } }> };
   assert.match(reportBody.placements[0].renderedResponse, /Sponsored via Ad Daddy/);

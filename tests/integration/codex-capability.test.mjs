@@ -162,6 +162,8 @@ test("a valid placement creates one isolated display turn and returns a receipt"
   assert.equal(host.threadStartCalls.length, 1);
   assert.equal(host.turnStartCalls.length, 1);
   assert.equal(host.turnStartCalls[0].cwd, "/tmp/ad-daddy-empty");
+  assert.deepEqual(host.turnStartCalls[0].runtimeWorkspaceRoots, []);
+  assert.deepEqual(host.turnStartCalls[0].environments, []);
   assert.equal(host.turnStartCalls[0].approvalPolicy, "never");
   assert.deepEqual(host.turnStartCalls[0].sandboxPolicy, {
     type: "readOnly",
@@ -172,6 +174,11 @@ test("a valid placement creates one isolated display turn and returns a receipt"
     SPONSORED_DISPLAY_INSTRUCTION,
   );
   assert.deepEqual(host.threadStartCalls[0].config.mcp_servers, {});
+  assert.deepEqual(host.threadStartCalls[0].runtimeWorkspaceRoots, []);
+  assert.deepEqual(host.threadStartCalls[0].environments, []);
+  assert.deepEqual(host.threadStartCalls[0].dynamicTools, []);
+  assert.deepEqual(host.threadStartCalls[0].config.tools, { web_search: null });
+  assert.equal(host.threadStartCalls[0].config.web_search, "disabled");
 });
 
 test("invalid and expired placements create no host state", async () => {
@@ -273,16 +280,69 @@ test("persists host identifiers before delivery finishes and retries by direct m
     onHostIdentifiers: async (value) => identifiers.push(structuredClone(value)),
   });
   assert.equal(first.delivered, true);
-  assert.equal(identifiers.length, 1);
-  assert.equal(identifiers[0].threadId, first.receipt.threadId);
-  assert.equal(identifiers[0].turnId, first.receipt.turnId);
+  assert.equal(identifiers.length, 3);
+  assert.deepEqual(identifiers[0], {
+    placementId: first.receipt.placementId,
+    threadId: first.receipt.threadId,
+  });
+  assert.equal(identifiers[1].instructionSourcesVerified, true);
+  assert.deepEqual(identifiers[1].instructionSources, []);
+  assert.equal(identifiers[2].turnId, first.receipt.turnId);
 
   const retry = await deliverCodexPlacement({
     ...deliveryOptions(host),
-    existingHostIdentifiers: identifiers[0],
+    existingHostIdentifiers: {
+      ...identifiers[1],
+      turnId: identifiers[2].turnId,
+    },
   });
   assert.equal(retry.delivered, true);
   assert.equal(retry.receipt.threadId, first.receipt.threadId);
+  assert.equal(host.threadStartCalls.length, 1);
+  assert.equal(host.turnStartCalls.length, 1);
+});
+
+test("an instruction-source failure persists the empty task and retry never duplicates or starts it", async () => {
+  const host = new FakeAppServerHost({ instructionSources: ["/workspace/AGENTS.md"] });
+  const identifiers = [];
+  const first = await deliverCodexPlacement({
+    ...deliveryOptions(host),
+    onHostIdentifiers: async (value) => identifiers.push(structuredClone(value)),
+  });
+
+  assert.equal(first.delivered, false);
+  assert.equal(first.code, "INSTRUCTION_SOURCE_LEAK");
+  assert.equal(identifiers.length, 2);
+  assert.equal(identifiers[0].threadId, identifiers[1].threadId);
+  assert.equal(identifiers[1].instructionSourcesVerified, true);
+  assert.deepEqual(identifiers[1].instructionSources, ["/workspace/AGENTS.md"]);
+
+  const retry = await deliverCodexPlacement({
+    ...deliveryOptions(host),
+    existingHostIdentifiers: identifiers[1],
+  });
+  assert.equal(retry.delivered, false);
+  assert.equal(retry.code, "INSTRUCTION_SOURCE_LEAK");
+  assert.equal(host.threadStartCalls.length, 1);
+  assert.equal(host.turnStartCalls.length, 0);
+});
+
+test("a mapped zero-turn task resumes only after durable instruction isolation", async () => {
+  const host = new FakeAppServerHost({ failNameOnce: true });
+  const identifiers = [];
+  const first = await deliverCodexPlacement({
+    ...deliveryOptions(host),
+    onHostIdentifiers: async (value) => identifiers.push(structuredClone(value)),
+  });
+  assert.equal(first.delivered, false);
+  assert.equal(first.code, "TURN_FAILED");
+
+  const verified = identifiers.find((value) => value.instructionSourcesVerified);
+  const retry = await deliverCodexPlacement({
+    ...deliveryOptions(host),
+    existingHostIdentifiers: verified,
+  });
+  assert.equal(retry.delivered, true);
   assert.equal(host.threadStartCalls.length, 1);
   assert.equal(host.turnStartCalls.length, 1);
 });
@@ -291,7 +351,9 @@ test("an ambiguous persistence failure recovers the completed task without dupli
   const host = new FakeAppServerHost();
   const first = await deliverCodexPlacement({
     ...deliveryOptions(host),
-    onHostIdentifiers: async () => { throw new Error("simulated receipt store outage"); },
+    onHostIdentifiers: async (identifiers) => {
+      if (identifiers.turnId) throw new Error("simulated receipt store outage");
+    },
   });
   assert.equal(first.delivered, false);
   assert.equal(first.code, "TURN_FAILED");
@@ -301,6 +363,20 @@ test("an ambiguous persistence failure recovers the completed task without dupli
   assert.equal(retry.delivered, true);
   assert.equal(host.threadStartCalls.length, 1);
   assert.equal(host.turnStartCalls.length, 1);
+});
+
+test("a task whose immediate durable mapping fails is archived before delivery stops", async () => {
+  const host = new FakeAppServerHost();
+  const result = await deliverCodexPlacement({
+    ...deliveryOptions(host),
+    onHostIdentifiers: async () => { throw new Error("simulated local disk failure"); },
+  });
+
+  assert.equal(result.delivered, false);
+  assert.equal(result.code, "TURN_FAILED");
+  assert.equal(host.threadStartCalls.length, 1);
+  assert.equal(host.turnStartCalls.length, 0);
+  assert.deepEqual(host.archiveCalls, [{ threadId: "sponsored-1" }]);
 });
 
 test("retrying an archived placement never creates a duplicate task or turn", async () => {
@@ -353,6 +429,7 @@ class FakeAppServerHost {
   threadStartCalls = [];
   turnStartCalls = [];
   interruptCalls = [];
+  archiveCalls = [];
   #nextThread = 1;
   #nextTurn = 1;
   #options;
@@ -403,9 +480,16 @@ class FakeAppServerHost {
             archived: false,
           };
           this.threads.set(id, thread);
-          return { thread: summary(thread), instructionSources: [] };
+          return {
+            thread: summary(thread),
+            instructionSources: this.#options.instructionSources ?? [],
+          };
         }
         if (method === "thread/name/set") {
+          if (this.#options.failNameOnce) {
+            this.#options.failNameOnce = false;
+            throw new Error("simulated thread naming failure");
+          }
           this.threads.get(params.threadId).name = params.name;
           return {};
         }
@@ -459,6 +543,12 @@ class FakeAppServerHost {
           const thread = this.threads.get(params.threadId);
           const turn = thread.turns.find((candidate) => candidate.id === params.turnId);
           if (turn) turn.status = "interrupted";
+          return {};
+        }
+        if (method === "thread/archive") {
+          this.archiveCalls.push(structuredClone(params));
+          const thread = this.threads.get(params.threadId);
+          if (thread) thread.archived = true;
           return {};
         }
         if (method === "thread/read") {

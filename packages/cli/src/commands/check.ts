@@ -1,13 +1,26 @@
 import type { LocalStore } from "../local-store.js";
 import { evaluateCheckPolicy } from "../scheduler.js";
 
-export async function runManualCheck(input: {
+type SkippedCheck = { status: "skipped"; reason: "not_active" | "quiet_hours" | "cadence" | "frequency_cap" };
+type CheckedResponse<Response> = { status: "checked"; response: Response };
+type CheckInput<Response> = {
   installationId: string;
   store: LocalStore;
-  poll: (publishedFields: object) => Promise<unknown>;
+  poll: (publishedFields: object) => Promise<Response>;
   placementsToday?: number;
   now?: Date;
-}) {
+};
+
+export function runManualCheck<Response, Delivery>(input: CheckInput<Response> & {
+  delivery: { deliver(response: Response, now?: Date): Promise<Delivery> };
+}): Promise<SkippedCheck | (CheckedResponse<Response> & { delivery: Delivery })>;
+export function runManualCheck<Response>(input: CheckInput<Response> & { delivery?: undefined }): Promise<SkippedCheck | CheckedResponse<Response>>;
+export function runManualCheck<Response, Delivery>(input: CheckInput<Response> & {
+  delivery?: { deliver(response: Response, now?: Date): Promise<Delivery> };
+}): Promise<SkippedCheck | (CheckedResponse<Response> & { delivery?: Delivery })>;
+export async function runManualCheck<Response, Delivery>(input: CheckInput<Response> & {
+  delivery?: { deliver(response: Response, now?: Date): Promise<Delivery> };
+}): Promise<SkippedCheck | (CheckedResponse<Response> & { delivery?: Delivery })> {
   const config = await input.store.get(input.installationId);
   if (!config) throw new Error("Unknown installation");
   if (config.status !== "active") return { status: "skipped", reason: "not_active" } as const;
@@ -24,9 +37,19 @@ export async function runManualCheck(input: {
       placementsToday: input.placementsToday,
     },
   );
-  if (!decision.allowed) return { status: "skipped", reason: decision.reason } as const;
+  if (!decision.allowed) {
+    if (!decision.reason) throw new Error("A denied check policy must include a reason");
+    return { status: "skipped", reason: decision.reason } as const;
+  }
   const response = await input.poll(config.publishedFields);
+  const delivery = input.delivery
+    ? await input.delivery.deliver(response, now)
+    : undefined;
   config.lastCheckedAt = now.toISOString();
   await input.store.put(config);
-  return { status: "checked", response } as const;
+  return {
+    status: "checked",
+    response,
+    ...(delivery === undefined ? {} : { delivery }),
+  } as const;
 }

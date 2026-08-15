@@ -25,10 +25,21 @@ export default async function ReceiverSettingsPage() {
           {fields.map(([name, label]) => (
             <label key={name}><input type="checkbox" name={`enabled.${name}`} /> {label}</label>
           ))}
+          <label>Coarse location<input name="coarseLocation" placeholder="US Northeast" /></label>
+          <label>Project names<input name="projectNames" placeholder="Agent inbox, API monitor" /></label>
+          <label>Public GitHub repositories<input name="publicRepositoryUrls" placeholder="https://github.com/example/public-repo" /></label>
+          <label>Private repo technologies<input name="privateRepoTechStacks" placeholder="React, TypeScript, Postgres" /></label>
+          <label>Project descriptions<textarea name="projectDescriptions" placeholder="One description per line" /></label>
+          <label>Subscription tier<input name="subscriptionTier" placeholder="Pro" /></label>
+          <label>Token usage range<input name="tokenUsageRange" placeholder="1M-5M / month" /></label>
+          <label>Total session range<input name="totalSessionRange" placeholder="100-500" /></label>
+          <label>Minimum cash take-home<input name="minimumTakeHomeMinor" type="number" min="0" /></label>
+          <label>Rewards<select name="rewardType" multiple defaultValue={["stablecoin"]}><option value="stablecoin">Stablecoin</option><option value="credits">Credits</option><option value="discount">Discount</option></select></label>
         </fieldset>
         <fieldset>
           <legend>Delivery</legend>
           <label>Cadence (minutes)<input name="cadenceMinutes" type="number" min="5" defaultValue="60" /></label>
+          <label>Maximum ads per day<input name="maxAdsPerDay" type="number" min="1" max="24" defaultValue="2" /></label>
           <label>Quiet hours<input name="quietHours" placeholder="22:00–07:00" /></label>
           <p>Native ads use one display turn in a separate sponsored session. The selected model is shown before activation.</p>
         </fieldset>

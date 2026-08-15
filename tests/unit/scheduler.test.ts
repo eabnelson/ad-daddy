@@ -69,3 +69,42 @@ test("manual checks enforce the receiver's local daily frequency cap", async () 
   assert.deepEqual(result, { status: "skipped", reason: "frequency_cap" });
   assert.equal(polls, 0);
 });
+
+test("an eligible manual check hands the cleared response to the local delivery runtime", async () => {
+  const store = new MemoryLocalStore();
+  await store.put({
+    installationId: "installation_live",
+    accountId: "account_1",
+    role: "receiver",
+    profile: { values: {}, enabled: {} },
+    publishedFields: {},
+    cadenceMinutes: 60,
+    termsVersion: "terms/v1",
+    privacyVersion: "privacy/v1",
+    consentVersion: 1,
+    status: "active",
+    hostDisclosure: { host: "Codex", consumesTurn: true },
+  });
+  const cleared = { placement: { payload: { placementId: "placement_1" } } };
+  let delivered: unknown;
+
+  const result = await runManualCheck({
+    installationId: "installation_live",
+    store,
+    poll: async () => cleared,
+    delivery: {
+      deliver: async (response) => {
+        delivered = response;
+        return { status: "native", placementId: "placement_1" };
+      },
+    },
+    now: new Date("2026-08-15T12:00:00.000Z"),
+  });
+
+  assert.equal(delivered, cleared);
+  assert.deepEqual(result, {
+    status: "checked",
+    response: cleared,
+    delivery: { status: "native", placementId: "placement_1" },
+  });
+});

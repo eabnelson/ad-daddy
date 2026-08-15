@@ -2,10 +2,11 @@ import { parseBoundedForm, parseBoundedJson, RequestLimitError } from "../../../
 import {
   placementDeliveryRepository,
 } from "../../../../../../lib/marketplace/placement-registry.ts";
-import type {
-  PlacementDeliveryRecord,
-  PlacementDeliveryRepository,
-  PlacementReceiverAction,
+import {
+  applyPlacementReceiverAction,
+  type PlacementDeliveryRecord,
+  type PlacementDeliveryRepository,
+  type PlacementReceiverAction,
 } from "../../../../../../lib/marketplace/placement-delivery.ts";
 import { placementBlocklist, type PlacementBlocklist } from "../../../../../../lib/marketplace/blocking.ts";
 import { lifecycleEvents, type LifecycleEventStore } from "../../../../../../lib/observability/events.ts";
@@ -35,12 +36,7 @@ export function createPlacementReceiptHandler(
       if (!body?.action || !["hide", "block_advertiser", "report"].includes(body.action)) {
         return json(400, { error: "invalid_receiver_action" });
       }
-      const updated = {
-        ...record,
-        status: body.action === "report" ? "reported" as const : "blocked" as const,
-        receiverAction: body.action,
-        updatedAt: new Date().toISOString(),
-      };
+      const updated = await applyPlacementReceiverAction(repository, id, accountId, body.action);
       if (body.action === "block_advertiser") {
         blocklist.block(accountId, record.validatedCreative.payload.advertiser.id);
         events.record({ eventId: `block:${id}`, type: "advertiser_blocked", occurredAt: updated.updatedAt, receiverAccountId: accountId, advertiserId: record.validatedCreative.payload.advertiser.id, placementId: id });
@@ -48,7 +44,6 @@ export function createPlacementReceiptHandler(
       if (body.action === "report") {
         events.record({ eventId: `report:${id}`, type: "placement_reported", occurredAt: updated.updatedAt, receiverAccountId: accountId, advertiserId: record.validatedCreative.payload.advertiser.id, placementId: id });
       }
-      await repository.put(updated);
       return json(200, publicReceipt(updated));
     } catch (error) {
       if (error instanceof RequestLimitError) return json(error.status, { error: error.code });

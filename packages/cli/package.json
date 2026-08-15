@@ -21,9 +21,12 @@
     "ad-daddy": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test"
+  },
+  "dependencies": {
+    "@ad-daddy/host-adapters": "0.1.0"
   },
   "devDependencies": {
     "typescript": "5.9.3"

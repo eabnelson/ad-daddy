@@ -35,6 +35,8 @@ export interface PlacementDeliveryRecord {
   hostKind?: "codex" | "signed-html";
   hostSessionId?: string;
   hostTurnId?: string;
+  hostInstructionSourcesVerified?: boolean;
+  hostInstructionSources?: string[];
   receipt?: CodexDeliveryReceipt | GenericPlacementReceipt;
   lastFailureCode?: string;
   receiverAction?: PlacementReceiverAction;
@@ -54,6 +56,7 @@ export interface PlacementDeliveryRepository {
   put(record: PlacementDeliveryRecord): Promise<void>;
   listByReceiver(receiverAccountId: string): Promise<readonly PlacementDeliveryRecord[]>;
   listByAdvertiser(advertiserId: string): Promise<readonly PlacementDeliveryRecord[]>;
+  listByCampaign(campaignId: string): Promise<readonly PlacementDeliveryRecord[]>;
 }
 
 export class MemoryPlacementDeliveryRepository implements PlacementDeliveryRepository {
@@ -66,10 +69,13 @@ export class MemoryPlacementDeliveryRepository implements PlacementDeliveryRepos
   async listByAdvertiser(advertiserId: string) {
     return [...this.#records.values()].filter((record) => record.validatedCreative.payload.advertiser.id === advertiserId).map((record) => clone(record)!);
   }
+  async listByCampaign(campaignId: string) {
+    return [...this.#records.values()].filter((record) => record.marketContext?.campaignId === campaignId).map((record) => clone(record)!);
+  }
 }
 
 export class PlacementDeliveryService {
-  readonly #serial = new KeyedSerialExecutor();
+  readonly #serial: KeyedSerialExecutor;
   readonly #repository: PlacementDeliveryRepository;
   readonly #signingKeys: MarketplaceSigningKeys;
   readonly #creativePolicy: CreativeValidationPolicy;
@@ -82,6 +88,7 @@ export class PlacementDeliveryService {
     advertiserPolicy?: { assertAllowed(receiverAccountId: string, advertiserId: string): void },
   ) {
     this.#repository = repository;
+    this.#serial = serialFor(repository);
     this.#signingKeys = signingKeys;
     this.#creativePolicy = creativePolicy;
     this.#advertiserPolicy = advertiserPolicy;
@@ -140,13 +147,22 @@ export class PlacementDeliveryService {
         placement: record.signedPlacement,
         publicKeyPem: key.publicKeyPem,
         existingHostIdentifiers: record.hostSessionId
-          ? { threadId: record.hostSessionId, turnId: record.hostTurnId }
+          ? {
+              threadId: record.hostSessionId,
+              turnId: record.hostTurnId,
+              instructionSourcesVerified: record.hostInstructionSourcesVerified,
+              instructionSources: record.hostInstructionSources,
+            }
           : undefined,
         onHostIdentifiers: async (ids) => {
           record = {
             ...record,
             hostSessionId: ids.threadId,
             hostTurnId: ids.turnId ?? record.hostTurnId,
+            hostInstructionSourcesVerified:
+              ids.instructionSourcesVerified ?? record.hostInstructionSourcesVerified,
+            hostInstructionSources:
+              ids.instructionSources ?? record.hostInstructionSources,
             updatedAt: new Date().toISOString(),
           };
           await this.#repository.put(record);
@@ -179,6 +195,9 @@ export class PlacementDeliveryService {
     return this.#serial.run(placementId, async () => {
       const record = this.require(await this.#repository.get(placementId));
       if (record.receipt) return record;
+      if (["blocked", "reported", "expired"].includes(record.status)) {
+        throw new Error(`Placement cannot be delivered while ${record.status}`);
+      }
       const key = this.#signingKeys.verifyWithKey(record.signedPlacement, now);
       const result = deliverGenericPlacement({ placement: record.signedPlacement, publicKeyPem: key.publicKeyPem, creativeUrl, now });
       if (!result.delivered) throw new Error(result.reason);
@@ -195,18 +214,7 @@ export class PlacementDeliveryService {
   }
 
   async receiverAction(placementId: string, receiverAccountId: string, action: PlacementReceiverAction, now = new Date()) {
-    return this.#serial.run(placementId, async () => {
-      const record = this.require(await this.#repository.get(placementId));
-      if (record.receiverAccountId !== receiverAccountId) throw new Error("Placement not found");
-      const updated: PlacementDeliveryRecord = {
-        ...record,
-        status: action === "report" ? "reported" : "blocked",
-        receiverAction: action,
-        updatedAt: now.toISOString(),
-      };
-      await this.#repository.put(updated);
-      return clone(updated)!;
-    });
+    return applyPlacementReceiverAction(this.#repository, placementId, receiverAccountId, action, now);
   }
 
   async receipt(placementId: string, receiverAccountId: string): Promise<PlacementDeliveryRecord> {
@@ -219,6 +227,38 @@ export class PlacementDeliveryService {
     if (!record) throw new Error("Placement not found");
     return record;
   }
+}
+
+const repositorySerializers = new WeakMap<PlacementDeliveryRepository, KeyedSerialExecutor>();
+
+function serialFor(repository: PlacementDeliveryRepository): KeyedSerialExecutor {
+  let serial = repositorySerializers.get(repository);
+  if (!serial) {
+    serial = new KeyedSerialExecutor();
+    repositorySerializers.set(repository, serial);
+  }
+  return serial;
+}
+
+export function applyPlacementReceiverAction(
+  repository: PlacementDeliveryRepository,
+  placementId: string,
+  receiverAccountId: string,
+  action: PlacementReceiverAction,
+  now = new Date(),
+): Promise<PlacementDeliveryRecord> {
+  return serialFor(repository).run(placementId, async () => {
+    const record = await repository.get(placementId);
+    if (!record || record.receiverAccountId !== receiverAccountId) throw new Error("Placement not found");
+    const updated: PlacementDeliveryRecord = {
+      ...record,
+      status: action === "report" ? "reported" : "blocked",
+      receiverAction: action,
+      updatedAt: now.toISOString(),
+    };
+    await repository.put(updated);
+    return clone(updated)!;
+  });
 }
 
 function fingerprint(value: unknown): string { return JSON.stringify(value); }
