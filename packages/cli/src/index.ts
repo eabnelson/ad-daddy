@@ -3,6 +3,7 @@ export const CLI_VERSION = "0.1.0";
 export * from "./commands/check.js";
 export * from "./commands/advertiser.js";
 export * from "./commands/campaign.js";
+export { findEligibleOpportunities } from "./commands/opportunity.js";
 export * from "./commands/profile.js";
 export * from "./commands/setup.js";
 export * from "./install-integrity.js";

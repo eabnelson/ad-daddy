@@ -1,6 +1,6 @@
 import { campaignRuntime, type CampaignRuntime } from "../../../../lib/marketplace/campaign-registry.ts";
 import { CAMPAIGN_REQUEST_LIMITS, parseBoundedJson, RequestLimitError } from "../../../../lib/http/request-limits.ts";
-import type { CampaignApproval, CampaignDraft } from "../../../../packages/cli/src/commands/campaign.ts";
+import type { CampaignApproval, CampaignDraft } from "@ad-daddy/cli/campaign";
 
 interface CampaignRequestBody {
   action: "prepare" | "fund" | "activate" | "pause" | "close" | "issue_agent_token";

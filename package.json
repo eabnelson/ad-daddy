@@ -11,8 +11,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
-    "build": "npm run build:app && npm run build:packages",
+    "dev": "npm run build:packages && WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
+    "build": "npm run build:packages && npm run build:app",
     "build:app": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "build:packages": "npm run build --workspaces --if-present",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",

@@ -5,11 +5,14 @@ export class FixedWindowRateLimiter {
   readonly #limit: number;
   readonly #windowMs: number;
   readonly #maxRetry: number;
+  #checks = 0;
   constructor(input: { limit: number; windowMs: number; maxRetryAfterSeconds: number }) {
-    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || !Number.isSafeInteger(input.windowMs) || input.windowMs < 1) throw new Error("Rate limit values must be positive integers");
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || !Number.isSafeInteger(input.windowMs) || input.windowMs < 1 || !Number.isSafeInteger(input.maxRetryAfterSeconds) || input.maxRetryAfterSeconds < 1) throw new Error("Rate limit values must be positive integers");
     this.#limit = input.limit; this.#windowMs = input.windowMs; this.#maxRetry = input.maxRetryAfterSeconds;
   }
   check(keys: readonly string[], now = new Date()): RateLimitResult {
+    this.#checks += 1;
+    if (this.#checks % 256 === 0) this.evictExpired(now.getTime());
     const uniqueKeys = [...new Set(keys)];
     if (uniqueKeys.length === 0 || uniqueKeys.length > 8 || uniqueKeys.some((key) => !key || key.length > 256)) throw new Error("Rate limit keys are invalid");
     let retryAfterSeconds = 0;
@@ -26,5 +29,13 @@ export class FixedWindowRateLimiter {
       else bucket.count += 1;
     }
     return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  get trackedBucketCount(): number { return this.#counts.size; }
+
+  private evictExpired(now: number): void {
+    for (const [key, bucket] of this.#counts) {
+      if (now - bucket.windowStart >= this.#windowMs) this.#counts.delete(key);
+    }
   }
 }

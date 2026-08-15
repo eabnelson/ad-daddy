@@ -1,6 +1,7 @@
 import type { CampaignService } from "./campaign.js";
+import type { SetupRole } from "../local-store.js";
 
-export function prepareAdvertiserSetup(role: "receiver" | "advertiser" | "both") {
+export function prepareAdvertiserSetup(role: SetupRole) {
   if (role === "receiver") throw new Error("Advertiser setup requires advertiser or both role");
   return Object.freeze({ role, next: "verify brand ownership and prepare a bounded campaign" });
 }

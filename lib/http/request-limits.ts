@@ -13,18 +13,43 @@ export class RequestLimitError extends Error {
 
 export const CAMPAIGN_REQUEST_LIMITS = Object.freeze({ maxBytes: 32_768, maxCollectionItems: 50, maxDepth: 8, maxStringLength: 8_192 });
 export const OPPORTUNITY_REQUEST_LIMITS = Object.freeze({ maxBytes: 8_192, maxCollectionItems: 100, maxDepth: 6, maxStringLength: 1_024 });
+export const AUCTION_REQUEST_LIMITS = Object.freeze({ maxBytes: 16_384, maxCollectionItems: 50, maxDepth: 6, maxStringLength: 2_048 });
 
 export async function parseBoundedJson(request: Request, limits: RequestLimits): Promise<unknown> {
   if (!Number.isSafeInteger(limits.maxBytes) || limits.maxBytes < 1) throw new Error("maxBytes must be positive");
   const declared = request.headers.get("content-length");
   if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limits.maxBytes)) throw new RequestLimitError("BODY_TOO_LARGE", `Request body may not exceed ${limits.maxBytes} bytes`);
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength > limits.maxBytes) throw new RequestLimitError("BODY_TOO_LARGE", `Request body may not exceed ${limits.maxBytes} bytes`);
+  const bytes = await readBoundedBody(request, limits.maxBytes);
   let value: unknown;
   try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
   catch { throw new RequestLimitError("INVALID_JSON", "Request body must be valid UTF-8 JSON"); }
   inspect(value, limits, 0);
   return value;
+}
+
+async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array> {
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("request body exceeds configured limit");
+        throw new RequestLimitError("BODY_TOO_LARGE", `Request body may not exceed ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
 }
 
 function inspect(value: unknown, limits: RequestLimits, depth: number): void {

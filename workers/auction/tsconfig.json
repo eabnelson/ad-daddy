@@ -1,8 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist",
-    "rootDir": "src"
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "../../lib/marketplace/auction.ts", "../../lib/marketplace/ranking.ts", "../../lib/marketplace/budget.ts", "../../lib/payments/ledger.ts", "../../lib/domain/types.ts", "../../lib/runtime/keyed-serial.ts"]
 }

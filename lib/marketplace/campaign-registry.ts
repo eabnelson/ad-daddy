@@ -1,6 +1,6 @@
 import { CampaignTokenService } from "../auth/campaign-token.ts";
 import { FixedWindowRateLimiter } from "../http/rate-limit.ts";
-import { CampaignService, MemoryCampaignRepository, type OpportunityCandidate } from "../../packages/cli/src/commands/campaign.ts";
+import { CampaignService, MemoryCampaignRepository, type OpportunityCandidate } from "@ad-daddy/cli/campaign";
 import { CampaignBudgetService } from "./budget.ts";
 
 const budgets = new CampaignBudgetService();

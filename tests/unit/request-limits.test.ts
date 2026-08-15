@@ -19,3 +19,22 @@ test("actor, campaign, and IP throttles return bounded retry guidance", () => {
   assert.equal(second.allowed, false);
   assert.equal(second.retryAfterSeconds, 59);
 });
+
+test("chunked bodies stop at the byte limit and expired rate buckets are evicted", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("x".repeat(60)));
+      controller.enqueue(new TextEncoder().encode("x".repeat(60)));
+    },
+    cancel() { cancelled = true; },
+  });
+  await assert.rejects(parseBoundedJson(new Request("https://example.test", { method: "POST", body, duplex: "half" } as RequestInit), { maxBytes: 100, maxCollectionItems: 2 }), RequestLimitError);
+  assert.equal(cancelled, true);
+
+  const limiter = new FixedWindowRateLimiter({ limit: 1, windowMs: 1, maxRetryAfterSeconds: 1 });
+  for (let index = 0; index < 255; index += 1) limiter.check([`expired:${index}`], new Date(0));
+  assert.equal(limiter.trackedBucketCount, 255);
+  limiter.check(["current"], new Date(2));
+  assert.equal(limiter.trackedBucketCount, 1);
+});

@@ -280,6 +280,54 @@ export const opportunities = sqliteTable("opportunities", {
   check("opportunity_consent_version_positive", sql`${table.consentVersion} > 0`),
 ]);
 
+export const auctions = sqliteTable("auctions", {
+  id: text("id").primaryKey(),
+  opportunityId: text("opportunity_id").notNull().references(() => opportunities.id),
+  rewardLane: text("reward_lane", { enum: ["stablecoin", "credits", "discount"] }).notNull(),
+  consentVersion: integer("consent_version").notNull(),
+  minimumTakeHomeMinor: integer("minimum_take_home_minor").notNull(),
+  matchedSignalNamesJson: text("matched_signal_names_json").notNull(),
+  status: text("status", { enum: ["open", "decided"] }).notNull().default("open"),
+  closesAt: text("closes_at").notNull(),
+  decidedAt: text("decided_at"),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("auction_opportunity_unique").on(table.opportunityId),
+  index("auction_deadline_status_idx").on(table.status, table.closesAt),
+  check("auction_consent_version_positive", sql`${table.consentVersion} > 0`),
+  check("auction_minimum_nonnegative", sql`${table.minimumTakeHomeMinor} >= 0`),
+]);
+
+export const auctionBids = sqliteTable("auction_bids", {
+  id: text("id").primaryKey(),
+  auctionId: text("auction_id").notNull().references(() => auctions.id),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  rewardLane: text("reward_lane", { enum: ["stablecoin", "credits", "discount"] }).notNull(),
+  grossAmountMinor: integer("gross_amount_minor").notNull(),
+  receiverAmountMinor: integer("receiver_amount_minor").notNull(),
+  operatorAmountMinor: integer("operator_amount_minor").notNull(),
+  submittedAt: text("submitted_at").notNull(),
+}, (table) => [
+  uniqueIndex("auction_bid_campaign_unique").on(table.auctionId, table.campaignId),
+  index("auction_bid_rank_idx").on(table.auctionId, table.grossAmountMinor),
+  check("auction_bid_amounts_nonnegative", sql`${table.grossAmountMinor} >= 0 AND ${table.receiverAmountMinor} >= 0 AND ${table.operatorAmountMinor} >= 0`),
+  check("auction_bid_split_balanced", sql`${table.receiverAmountMinor} + ${table.operatorAmountMinor} = ${table.grossAmountMinor}`),
+]);
+
+export const auctionDecisions = sqliteTable("auction_decisions", {
+  id: text("id").primaryKey(),
+  auctionId: text("auction_id").notNull().references(() => auctions.id),
+  winnerBidId: text("winner_bid_id").references(() => auctionBids.id),
+  reservationId: text("reservation_id"),
+  eligibleBidderCount: integer("eligible_bidder_count").notNull(),
+  noFillReason: text("no_fill_reason", { enum: ["no_eligible_bids", "budget_unavailable", "receiver_paused", "receiver_revoked", "stale_consent", "frequency_limited"] }),
+  decidedAt: text("decided_at").notNull(),
+}, (table) => [
+  uniqueIndex("auction_decision_once_unique").on(table.auctionId),
+  check("auction_decision_bidder_count_nonnegative", sql`${table.eligibleBidderCount} >= 0`),
+  check("auction_decision_exact_outcome", sql`(${table.winnerBidId} IS NOT NULL AND ${table.noFillReason} IS NULL) OR (${table.winnerBidId} IS NULL AND ${table.noFillReason} IS NOT NULL)`),
+]);
+
 export const placements = sqliteTable("placements", {
   id: text("id").primaryKey(),
   opportunityId: text("opportunity_id").notNull().references(() => opportunities.id),

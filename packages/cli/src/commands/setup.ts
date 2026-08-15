@@ -35,7 +35,7 @@ export class ReceiverSetupService {
   }
 
   async prepare(input: SetupInput) {
-    if (!(["receiver", "advertiser", "both"] as const).includes(input.role)) throw new Error("Choose receiver, advertiser, or both before setup");
+    selectSetupRole(input.role);
     if (input.role === "advertiser") throw new Error("Receiver profile setup requires receiver or both role");
     if (!Number.isSafeInteger(input.cadenceMinutes) || input.cadenceMinutes < 5) throw new Error("Cadence must be at least five minutes");
     const existing = await this.#store.get(input.installationId);

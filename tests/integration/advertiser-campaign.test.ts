@@ -45,11 +45,12 @@ test("agent prepares campaign but verified funded human approval gates productio
     rotatingOpportunityId: "rotation_1", category: "database", region: "US Northeast", host: "codex",
     acceptedRewardTypes: ["stablecoin"] as const, hasCashPayoutAddress: true,
     consentVersion: 2, currentConsentVersion: 2, expiresAt: "2026-08-15T17:00:00.000Z",
-    fields: { projectDescriptions: ["Building a customer support agent"], projectNames: ["Identifying"] },
+    fields: { projectDescriptions: ["Building a customer support agent"], projectNames: ["Identifying"], workspaceSecret: "must-not-leak" },
     preBidExposure: { projectNames: false, publicRepositoryUrls: false },
   }], now);
   assert.deepEqual(results.map((item) => item.opportunityId), ["rotation_1"]);
   assert.equal("projectNames" in results[0].fields, false);
+  assert.equal("workspaceSecret" in results[0].fields, false);
 });
 
 test("funding retries are idempotent and approvals reject malformed time bounds", async () => {

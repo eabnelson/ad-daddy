@@ -1,3 +1,5 @@
+import { requireChatGPTUser } from "../../chatgpt-auth";
+
 const fields = [
   ["coarseLocation", "Coarse location"],
   ["projectNames", "Project names"],
@@ -21,7 +23,7 @@ export default async function ReceiverSettingsPage() {
         <fieldset>
           <legend>Published snapshot</legend>
           {fields.map(([name, label]) => (
-            <label key={name}><input type="checkbox" name={`enabled.${name}`} /> <span>{label}</span></label>
+            <label key={name}><input type="checkbox" name={`enabled.${name}`} /> {label}</label>
           ))}
         </fieldset>
         <fieldset>
@@ -39,4 +41,3 @@ export default async function ReceiverSettingsPage() {
     </main>
   );
 }
-import { requireChatGPTUser } from "../../chatgpt-auth";

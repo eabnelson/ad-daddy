@@ -39,3 +39,10 @@ test("revoked, expired, and tampered tokens fail closed", async () => {
   tokens.revoke("token_2");
   await assert.rejects(tokens.verify(token, { accountId: "acct_1", campaignId: "campaign_1", scope: "campaign:read" }, now), /revoked/i);
 });
+
+test("spend authorization accepts only contexts produced by the token service", async () => {
+  const tokens = new CampaignTokenService("test-secret-with-at-least-32-characters");
+  assert.throws(() => tokens.authorizeVerifiedSpend({ claims: {} } as never, {
+    accountId: "acct_1", campaignId: "campaign_1", amountMinor: 1, bidMinor: 1, idempotencyKey: "forged",
+  }, now), /context is invalid/i);
+});

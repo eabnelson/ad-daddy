@@ -1,4 +1,7 @@
-export type CampaignRewardType = "stablecoin" | "credits" | "discount";
+import type { RewardType } from "./profile.js";
+import { findEligibleOpportunities, type OpportunityCandidate, type OpportunityView } from "./opportunity.js";
+
+export type { OpportunityCandidate, OpportunityView } from "./opportunity.js";
 export const ADVERTISER_TERMS_VERSION = "advertiser-terms/1";
 
 export interface CampaignDraft {
@@ -12,7 +15,7 @@ export interface CampaignDraft {
   categories: readonly string[];
   regions: readonly string[];
   hosts: readonly string[];
-  rewardTypes: readonly CampaignRewardType[];
+  rewardTypes: readonly RewardType[];
   creative: { headline: string; body: string };
   maximumSpendMinor: number;
   maximumBidMinor: number;
@@ -49,6 +52,7 @@ interface BudgetService {
   resume(campaignId: string): Promise<unknown>;
   close(campaignId: string): Promise<BudgetSnapshot>;
   snapshot(campaignId: string): BudgetSnapshot;
+  balance(campaignId: string): BudgetSnapshot;
   reserve(campaignId: string, reservationId: string, amountMinor: number, now?: Date): Promise<unknown>;
 }
 
@@ -105,7 +109,7 @@ export class CampaignService {
     assertActivationReady(campaign);
     assertApproval(campaign, approval, ["advertiser_verify", "terms_accept", "campaign_fund", "production_activate"], now);
     if (Date.parse(campaign.schedule.endsAt) <= now.getTime()) throw new Error("Campaign schedule has already ended");
-    if (campaign.fundedMinor < campaign.maximumSpendMinor || this.#budgets.snapshot(campaignId).withdrawableMinor <= 0) throw new Error("Campaign must be funded before activation");
+    if (campaign.fundedMinor < campaign.maximumSpendMinor || this.#budgets.balance(campaignId).withdrawableMinor <= 0) throw new Error("Campaign must be funded before activation");
     campaign.status = "active";
     campaign.activatedAt = now.toISOString();
     await this.#repository.put(campaign);
@@ -149,9 +153,8 @@ export class CampaignService {
 
   async search(campaignId: string, candidates: readonly OpportunityCandidate[], now = new Date()): Promise<OpportunityView[]> {
     const campaign = await this.requireActive(campaignId, now);
-    if (this.#budgets.snapshot(campaignId).withdrawableMinor <= 0) throw new Error("Campaign has no available funded budget");
-    if (candidates.length > 100) throw new Error("Opportunity search page is limited to 100 items");
-    return candidates.flatMap((candidate) => projectOpportunity(campaign, candidate, now));
+    if (this.#budgets.balance(campaignId).withdrawableMinor <= 0) throw new Error("Campaign has no available funded budget");
+    return findEligibleOpportunities(campaign, candidates, now);
   }
 
   async get(campaignId: string) { return this.require(campaignId); }
@@ -168,33 +171,6 @@ export class CampaignService {
     if (Date.parse(campaign.schedule.startsAt) > now.getTime() || Date.parse(campaign.schedule.endsAt) <= now.getTime()) throw new Error("Campaign is outside its approved schedule");
     return campaign;
   }
-}
-
-export interface OpportunityCandidate {
-  rotatingOpportunityId: string; category: string; region: string; host: string;
-  acceptedRewardTypes: readonly CampaignRewardType[]; consentVersion: number; currentConsentVersion: number;
-  expiresAt: string; fields: Record<string, unknown>; preBidExposure: { projectNames: boolean; publicRepositoryUrls: boolean };
-  hasCashPayoutAddress?: boolean;
-}
-export interface OpportunityView {
-  opportunityId: string; expiresAt: string; rewardTypes: readonly CampaignRewardType[];
-  fields: Record<string, unknown>; identityWarnings: readonly string[]; requiresCashPayoutAddress: boolean;
-}
-
-function projectOpportunity(campaign: CampaignRecord, candidate: OpportunityCandidate, now: Date): OpportunityView[] {
-  const expiry = Date.parse(candidate.expiresAt);
-  if (candidate.consentVersion !== candidate.currentConsentVersion || !Number.isFinite(expiry) || expiry <= now.getTime()) return [];
-  if (!campaign.categories.includes(candidate.category) || !campaign.regions.includes(candidate.region) || !campaign.hosts.includes(candidate.host)) return [];
-  let rewards = campaign.rewardTypes.filter((reward) => candidate.acceptedRewardTypes.includes(reward));
-  if (!candidate.hasCashPayoutAddress) rewards = rewards.filter((reward) => reward !== "stablecoin");
-  if (rewards.length === 0) return [];
-  const fields = structuredClone(candidate.fields);
-  const warnings: string[] = [];
-  if (!candidate.preBidExposure.projectNames) delete fields.projectNames;
-  else if (fields.projectNames !== undefined) warnings.push("projectNames may directly identify the receiver");
-  if (!candidate.preBidExposure.publicRepositoryUrls) delete fields.publicRepositoryUrls;
-  else if (fields.publicRepositoryUrls !== undefined) warnings.push("publicRepositoryUrls may directly identify the receiver");
-  return [{ opportunityId: candidate.rotatingOpportunityId, expiresAt: candidate.expiresAt, rewardTypes: rewards, fields, identityWarnings: warnings, requiresCashPayoutAddress: rewards.includes("stablecoin") }];
 }
 
 function validateCampaign(input: CampaignDraft): void {
