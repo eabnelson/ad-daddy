@@ -47,12 +47,12 @@ export interface CampaignApproval {
 
 interface BudgetSnapshot { withdrawableMinor: number; }
 interface BudgetService {
-  open(input: { campaignId: string; fundedMinor: number; dailyCapMinor: number }): unknown;
+  open(input: { campaignId: string; fundedMinor: number; dailyCapMinor: number }): unknown | Promise<unknown>;
   pause(campaignId: string): Promise<unknown>;
   resume(campaignId: string): Promise<unknown>;
   close(campaignId: string): Promise<BudgetSnapshot>;
-  snapshot(campaignId: string): BudgetSnapshot;
-  balance(campaignId: string): BudgetSnapshot;
+  snapshot(campaignId: string): BudgetSnapshot | Promise<BudgetSnapshot>;
+  balance(campaignId: string): BudgetSnapshot | Promise<BudgetSnapshot>;
   reserve(campaignId: string, reservationId: string, amountMinor: number, now?: Date): Promise<unknown>;
 }
 
@@ -136,7 +136,7 @@ export class CampaignService {
       async () => {
         if (campaign.fundedMinor === campaign.maximumSpendMinor && campaign.status === "funding_pending") return structuredClone(campaign);
         if (campaign.fundedMinor !== 0) throw new Error("Campaign is already funded");
-        this.#budgets.open({ campaignId, fundedMinor: campaign.maximumSpendMinor, dailyCapMinor: campaign.dailyCapMinor });
+        await this.#budgets.open({ campaignId, fundedMinor: campaign.maximumSpendMinor, dailyCapMinor: campaign.dailyCapMinor });
         campaign.fundedMinor = campaign.maximumSpendMinor;
         campaign.status = "funding_pending";
         campaign.termsAcceptedAt = now.toISOString();
@@ -152,7 +152,7 @@ export class CampaignService {
     await this.#assertActivationReady(campaign);
     assertApproval(campaign, approval, ["advertiser_verify", "terms_accept", "campaign_fund", "production_activate"], now);
     if (Date.parse(campaign.schedule.endsAt) <= now.getTime()) throw new Error("Campaign schedule has already ended");
-    if (campaign.fundedMinor < campaign.maximumSpendMinor || this.#budgets.balance(campaignId).withdrawableMinor <= 0) throw new Error("Campaign must be funded before activation");
+    if (campaign.fundedMinor < campaign.maximumSpendMinor || (await this.#budgets.balance(campaignId)).withdrawableMinor <= 0) throw new Error("Campaign must be funded before activation");
     campaign.status = "active";
     campaign.activatedAt = now.toISOString();
     await this.#repository.put(campaign);
@@ -196,7 +196,7 @@ export class CampaignService {
 
   async search(campaignId: string, candidates: readonly OpportunityCandidate[], now = new Date()): Promise<OpportunityView[]> {
     const campaign = await this.requireActive(campaignId, now);
-    if (this.#budgets.balance(campaignId).withdrawableMinor <= 0) throw new Error("Campaign has no available funded budget");
+    if ((await this.#budgets.balance(campaignId)).withdrawableMinor <= 0) throw new Error("Campaign has no available funded budget");
     return findEligibleOpportunities(campaign, candidates, now);
   }
 

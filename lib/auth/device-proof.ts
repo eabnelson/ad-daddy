@@ -1,3 +1,10 @@
+import {
+  canonicalDeviceProofEnvelope,
+  normalizeDeviceProofTarget,
+  sha256DeviceProofBody,
+  type DeviceProofEnvelope,
+} from "@ad-daddy/host-adapters";
+
 import type { Environment } from "../domain/types.ts";
 
 const ENVELOPE_KEYS = [
@@ -18,18 +25,7 @@ const METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const DEFAULT_MAX_PROOF_LIFETIME_MS = 5 * 60 * 1_000;
 const CLOCK_SKEW_MS = 30_000;
 
-export interface DeviceProofEnvelope {
-  method: string;
-  target: string;
-  audience: `ad-daddy:${Environment}`;
-  bodyDigest: string;
-  installationId: string;
-  consentVersion: number;
-  keyThumbprint: string;
-  nonce: string;
-  issuedAt: string;
-  expiresAt: string;
-}
+export type { DeviceProofEnvelope } from "@ad-daddy/host-adapters";
 
 export interface SignedDeviceProof {
   envelope: DeviceProofEnvelope;
@@ -250,34 +246,19 @@ export async function verifyDeviceProof(input: {
 
 export function canonicalizeDeviceProofEnvelope(envelope: DeviceProofEnvelope): string {
   const value = validateEnvelope(envelope);
-  return JSON.stringify({
-    method: value.method,
-    target: value.target,
-    audience: value.audience,
-    bodyDigest: value.bodyDigest,
-    installationId: value.installationId,
-    consentVersion: value.consentVersion,
-    keyThumbprint: value.keyThumbprint,
-    nonce: value.nonce,
-    issuedAt: value.issuedAt,
-    expiresAt: value.expiresAt,
-  });
+  return canonicalDeviceProofEnvelope(value);
 }
 
 export function normalizeRequestTarget(target: string): string {
-  if (typeof target !== "string" || target.length < 1 || target.length > 2_048 || !target.startsWith("/") || target.startsWith("//") || target.includes("#")) {
+  try {
+    return normalizeDeviceProofTarget(target);
+  } catch {
     throw new DeviceProofError("target must be a bounded origin-relative URL without a fragment");
   }
-  const url = new URL(target, "https://device-proof.invalid");
-  const entries = [...url.searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) =>
-    compareCodePoints(leftKey, rightKey) || compareCodePoints(leftValue, rightValue));
-  const query = new URLSearchParams(entries).toString();
-  return `${url.pathname}${query ? `?${query}` : ""}`;
 }
 
 export async function sha256BodyDigest(body: string | Uint8Array): Promise<string> {
-  const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
-  return hex(await crypto.subtle.digest("SHA-256", toArrayBuffer(bytes)));
+  return sha256DeviceProofBody(body);
 }
 
 export async function deviceKeyThumbprint(jwk: JsonWebKey): Promise<string> {
@@ -364,21 +345,12 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-function hex(value: ArrayBuffer): string {
-  return [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 function deviceKeyId(installationId: string, thumbprint: string): string {
   return `${installationId}:${thumbprint}`;
 }
 
 function nonceId(installationId: string, nonce: string): string {
   return `${installationId}:${nonce}`;
-}
-
-function compareCodePoints(left: string, right: string): number {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
 }
 
 function nonceUse(input: DeviceNonceUse): DeviceNonceUse {

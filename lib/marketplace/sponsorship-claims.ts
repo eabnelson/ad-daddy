@@ -6,7 +6,22 @@ import {
   verify,
 } from "node:crypto";
 
-import { canonicalJson, type SignedPlacement } from "@ad-daddy/host-adapters";
+import {
+  canonicalJson,
+  type DisplayReceiptPayload,
+  type SignedDisplayReceipt,
+  type SignedPlacement,
+  type SignedSponsorshipGrant,
+  type SponsorshipDeliveryLease,
+  type SponsorshipGrantPayload,
+} from "@ad-daddy/host-adapters";
+export type {
+  DisplayReceiptPayload,
+  SignedDisplayReceipt,
+  SignedSponsorshipGrant,
+  SponsorshipDeliveryLease,
+  SponsorshipGrantPayload,
+} from "@ad-daddy/host-adapters";
 import type { ClaimState, ConsentStatus, Environment, RewardType } from "../domain/types.ts";
 import { KeyedSerialExecutor } from "../runtime/keyed-serial.ts";
 
@@ -58,36 +73,6 @@ export type SponsorshipOutcome =
       signedPlacement: SignedPlacement;
     };
 
-export interface SponsorshipGrantPayload {
-  protocolVersion: 1;
-  receiverAccountId: string;
-  receiverProfileId: string;
-  installationId: string;
-  deviceKeyThumbprint: string;
-  consentVersion: number;
-  opportunityId: string;
-  placementId: string;
-  campaignId: string;
-  reservationId: string;
-  rewardType: RewardType;
-  grossAmountMinor: number;
-  receiverAmountMinor: number;
-  operatorAmountMinor: number;
-  currency: "USD";
-  creativeDigest: string;
-  eligibleBidderCount: number;
-  grantDigest: string;
-  issuedAt: string;
-  expiresAt: string;
-}
-
-export interface SignedSponsorshipGrant {
-  algorithm: "Ed25519";
-  keyId: string;
-  payload: SponsorshipGrantPayload;
-  signature: string;
-}
-
 export interface SponsorshipClaimRecord {
   claimId: string;
   placementId: string;
@@ -104,45 +89,6 @@ export interface SponsorshipClaimRecord {
   expiresAt: string;
 }
 
-export interface SponsorshipDeliveryLease {
-  leaseId: string;
-  claimId: string;
-  installationId: string;
-  deviceKeyThumbprint: string;
-  creativeDigest: string;
-  policyVersion: string;
-  state: "active" | "displayed" | "expired" | "cancelled";
-  issuedAt: string;
-  expiresAt: string;
-}
-
-export interface DisplayReceiptPayload {
-  protocolVersion: 1;
-  claimId: string;
-  grantDigest: string;
-  reservationId: string;
-  placementId: string;
-  creativeDigest: string;
-  installationId: string;
-  deviceKeyThumbprint: string;
-  hostKind: "codex" | "claude" | "signed-html";
-  hostSessionId: string;
-  hostTurnId?: string;
-  outputSha256: string;
-  adapterVersion: string;
-  policyVersion: string;
-  surface: "sidebar_session";
-  audience: `ad-daddy:${Environment}`;
-  nonce: string;
-  displayedAt: string;
-}
-
-export interface SignedDisplayReceipt {
-  algorithm: "ES256";
-  payload: DisplayReceiptPayload;
-  signature: string;
-}
-
 export interface ReceiptAcceptance {
   receiptDigest: string;
   firstSurface: boolean;
@@ -153,6 +99,16 @@ export interface ExpiredUnclaimedReservation {
   opportunityId: string;
   campaignId: string;
   reservationId: string;
+}
+
+export interface ExpiryBatch<T> {
+  items: readonly T[];
+  hasMore: boolean;
+}
+
+export interface SettlementReviewResolution {
+  claim: SponsorshipClaimRecord;
+  receipt?: SignedDisplayReceipt;
 }
 
 export interface SponsorshipClaimRepository {
@@ -176,11 +132,14 @@ export interface SponsorshipClaimRepository {
     settlementReviewDeadlineAt: string;
   }): Promise<ReceiptAcceptance>;
   markSettled(claimId: string, settledAt: string): Promise<void>;
-  listExpirable(now: Date, deliveryLeaseReviewBefore: Date): Promise<readonly SponsorshipClaimRecord[]>;
-  listExpiredUnclaimedReservations(now: Date): Promise<readonly ExpiredUnclaimedReservation[]>;
+  listExpirable(now: Date, deliveryLeaseReviewBefore: Date, limit: number): Promise<ExpiryBatch<SponsorshipClaimRecord>>;
+  listExpiredUnclaimedReservations(now: Date, limit: number): Promise<ExpiryBatch<ExpiredUnclaimedReservation>>;
   expireUnclaimedOpportunity(opportunityId: string, now: Date): Promise<boolean>;
   cancelExpired(claimId: string, now: Date): Promise<boolean>;
-  moveToSettlementReview(claimId: string, now: Date): Promise<boolean>;
+  cancelUndisplayed(claimId: string, now: Date): Promise<boolean>;
+  moveToSettlementReview(claimId: string, now: Date, deadline: Date): Promise<boolean>;
+  getSettlementReview(claimId: string): Promise<SettlementReviewResolution | undefined>;
+  resolveSettlementReview(claimId: string, resolution: "settled" | "released", now: Date): Promise<boolean>;
   markReservationReleased(reservationId: string): Promise<void>;
 }
 
@@ -257,6 +216,7 @@ export class SponsorshipClaimService {
     const claimId = crypto.randomUUID();
     const grant = signGrant({
       protocolVersion: 1,
+      claimId,
       receiverAccountId: receiver.accountId,
       receiverProfileId: receiver.receiverProfileId,
       installationId: receiver.installationId,
@@ -348,25 +308,77 @@ export class SponsorshipClaimService {
     return Object.freeze({ status: "settled" });
   }
 
-  async expire(now = new Date()): Promise<void> {
+  async cancel(claimId: string, device: SponsorshipDeviceIdentity, now = new Date()): Promise<{ status: "cancelled" }> {
+    const [claim, lease] = await Promise.all([
+      this.#requireClaim(claimId),
+      this.#repository.getLease(claimId),
+    ]);
+    this.#assertClaimDevice(claim, device);
+    const retryingCancellation = claim.state === "cancelled" && lease?.state === "cancelled";
+    if (!lease || (lease.state !== "active" && !retryingCancellation)) throw new Error("Only an undisplayed active delivery lease can be cancelled");
+    const outcome = await this.#repository.assertSettlementOutcome(claim);
+    if (!retryingCancellation && !await this.#repository.cancelUndisplayed(claimId, now)) throw new Error("Sponsorship delivery can no longer be cancelled");
+    await this.#settlement.release({ campaignId: outcome.campaignId, reservationId: claim.reservationId, claimId: claim.claimId });
+    await this.#repository.markReservationReleased(claim.reservationId);
+    return Object.freeze({ status: "cancelled" });
+  }
+
+  async expire(now = new Date(), input: { batchSize?: number } = {}): Promise<{ processed: number; hasMore: boolean }> {
+    const batchSize = input.batchSize ?? 100;
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 1_000) throw new Error("Expiry batch size is invalid");
     const deliveryLeaseReviewBefore = new Date(now.getTime() - this.#receiptGraceMs);
-    for (const claim of await this.#repository.listExpirable(now, deliveryLeaseReviewBefore)) {
+    const claimBatch = await this.#repository.listExpirable(now, deliveryLeaseReviewBefore, batchSize);
+    let processed = 0;
+    for (const claim of claimBatch.items) {
+      if (claim.state === "delivery_leased") {
+        const outcome = await this.#repository.assertSettlementOutcome(claim);
+        if (await this.#repository.cancelUndisplayed(claim.claimId, now)) {
+          await this.#settlement.release({ campaignId: outcome.campaignId, reservationId: claim.reservationId, claimId: claim.claimId });
+          await this.#repository.markReservationReleased(claim.reservationId);
+          processed += 1;
+          continue;
+        }
+      }
       if (["delivery_leased", "displayed_pending_receipt", "consumed"].includes(claim.state)) {
-        await this.#repository.moveToSettlementReview(claim.claimId, now);
+        if (await this.#repository.moveToSettlementReview(claim.claimId, now, new Date(now.getTime() + this.#settlementReviewMs))) processed += 1;
         continue;
       }
       const outcome = await this.#repository.assertSettlementOutcome(claim);
       if (await this.#repository.cancelExpired(claim.claimId, now)) {
         await this.#settlement.release({ campaignId: outcome.campaignId, reservationId: claim.reservationId, claimId: claim.claimId });
         await this.#repository.markReservationReleased(claim.reservationId);
+        processed += 1;
       }
     }
-    for (const winner of await this.#repository.listExpiredUnclaimedReservations(now)) {
+    const unclaimedBatch = await this.#repository.listExpiredUnclaimedReservations(now, batchSize);
+    for (const winner of unclaimedBatch.items) {
       if (await this.#repository.expireUnclaimedOpportunity(winner.opportunityId, now)) {
         await this.#settlement.release({ campaignId: winner.campaignId, reservationId: winner.reservationId, claimId: `unclaimed:${winner.opportunityId}` });
         await this.#repository.markReservationReleased(winner.reservationId);
+        processed += 1;
       }
     }
+    return { processed, hasMore: claimBatch.hasMore || unclaimedBatch.hasMore };
+  }
+
+  async resolveSettlementReview(claimId: string, resolution: "settled" | "released", now = new Date()): Promise<{ status: "settled" | "released" }> {
+    const review = await this.#repository.getSettlementReview(claimId);
+    if (!review) throw new Error("Settlement review is unavailable");
+    const outcome = await this.#repository.assertSettlementOutcome(review.claim);
+    if (resolution === "settled") {
+      if (!review.receipt) throw new Error("Settlement review has no verified display receipt");
+      await this.#settlement.settle({ claim: review.claim, outcome, receipt: review.receipt });
+    } else {
+      await this.#settlement.release({ campaignId: outcome.campaignId, reservationId: review.claim.reservationId, claimId: review.claim.claimId });
+      await this.#repository.markReservationReleased(review.claim.reservationId);
+    }
+    if (!await this.#repository.resolveSettlementReview(claimId, resolution, now)) throw new Error("Settlement review was already resolved");
+    return { status: resolution };
+  }
+
+  async settlementReviewStatus(claimId: string): Promise<{ available: true; hasVerifiedReceipt: boolean } | { available: false }> {
+    const review = await this.#repository.getSettlementReview(claimId);
+    return review ? { available: true, hasVerifiedReceipt: Boolean(review.receipt) } : { available: false };
   }
 
   async #assertReceiver(device: SponsorshipDeviceIdentity): Promise<SponsorshipReceiver> {
@@ -386,12 +398,19 @@ export class SponsorshipClaimService {
     if (claim.installationId !== device.installationId || claim.deviceKeyThumbprint !== device.deviceKeyThumbprint || claim.consentVersion !== device.consentVersion) {
       throw new Error("Sponsorship claim is bound to a different device or consent version");
     }
+    if (claim.grant.payload.claimId !== claim.claimId) throw new Error("Sponsorship grant is bound to a different claim");
     if (claim.grant.payload.receiverAccountId !== device.accountId) throw new Error("Sponsorship claim is bound to a different receiver account");
   }
 }
 
 type MemoryReceiver = SponsorshipReceiver;
-interface MemoryRecovery { receiptDigest: string; settlementState: "pending" | "settled" | "settlement_review"; graceExpiresAt?: string; settlementReviewDeadlineAt?: string; }
+interface MemoryRecovery { receiptDigest: string; receipt?: SignedDisplayReceipt; settlementState: "pending" | "settled" | "settlement_review"; graceExpiresAt?: string; settlementReviewDeadlineAt?: string; }
+
+function expiryTime(claim: SponsorshipClaimRecord, lease?: SponsorshipDeliveryLease, recovery?: MemoryRecovery): string {
+  if (claim.state === "delivery_leased" && lease) return lease.expiresAt;
+  if (claim.state === "consumed" && recovery?.graceExpiresAt) return recovery.graceExpiresAt;
+  return claim.expiresAt;
+}
 
 export class MemorySponsorshipClaimRepository implements SponsorshipClaimRepository {
   readonly #receivers = new Map<string, MemoryReceiver>();
@@ -404,6 +423,7 @@ export class MemorySponsorshipClaimRepository implements SponsorshipClaimReposit
   readonly #recoveries = new Map<string, MemoryRecovery>();
   readonly #expiredUnclaimed = new Map<string, ExpiredUnclaimedReservation>();
   readonly #releasedReservations = new Set<string>();
+  readonly #settlementReviewDeadlines = new Map<string, string>();
   readonly #serial = new KeyedSerialExecutor();
   readonly #opportunityBucketMs: number;
   readonly #opportunityTtlMs: number;
@@ -443,7 +463,7 @@ export class MemorySponsorshipClaimRepository implements SponsorshipClaimReposit
     return this.#serial.run(key, () => {
       const existingId = this.#opportunityByBucket.get(key);
       if (existingId) return clone(this.#opportunities.get(existingId))!;
-      const opportunityId = `opportunity:${receiver.installationId}:${receiver.consentVersion}:${bucket}`;
+      const opportunityId = `opp_${createHash("sha256").update(key).digest("base64url")}`;
       const value: SponsorshipOpportunity = Object.freeze({
         opportunityId, auctionId: `auction:${opportunityId}`, receiverProfileId: receiver.receiverProfileId,
         installationId: receiver.installationId, consentVersion: receiver.consentVersion,
@@ -530,7 +550,7 @@ export class MemorySponsorshipClaimRepository implements SponsorshipClaimReposit
         }
         return { receiptDigest: existing.receiptDigest, firstSurface: false, settlementState: existing.settlementState };
       }
-      this.#recoveries.set(input.claim.claimId, { receiptDigest: input.receiptDigest, settlementState: "pending", graceExpiresAt: input.graceExpiresAt, settlementReviewDeadlineAt: input.settlementReviewDeadlineAt });
+      this.#recoveries.set(input.claim.claimId, { receiptDigest: input.receiptDigest, receipt: clone(input.receipt), settlementState: "pending", graceExpiresAt: input.graceExpiresAt, settlementReviewDeadlineAt: input.settlementReviewDeadlineAt });
       this.#claims.get(input.claim.claimId)!.state = "consumed";
       this.#leases.get(input.claim.claimId)!.state = "displayed";
       return { receiptDigest: input.receiptDigest, firstSurface: true, settlementState: "pending" };
@@ -543,8 +563,8 @@ export class MemorySponsorshipClaimRepository implements SponsorshipClaimReposit
     recovery.settlementState = "settled";
   }
 
-  async listExpirable(now: Date, deliveryLeaseReviewBefore: Date) {
-    return [...this.#claims.values()].filter((claim) => {
+  async listExpirable(now: Date, deliveryLeaseReviewBefore: Date, limit: number) {
+    const matches = [...this.#claims.values()].filter((claim) => {
       const recovery = this.#recoveries.get(claim.claimId);
       const lease = this.#leases.get(claim.claimId);
       return (["claimed", "expired", "cancelled"].includes(claim.state) && Date.parse(claim.expiresAt) <= now.getTime() &&
@@ -552,10 +572,12 @@ export class MemorySponsorshipClaimRepository implements SponsorshipClaimReposit
         (claim.state === "delivery_leased" && lease !== undefined && Date.parse(lease.expiresAt) <= deliveryLeaseReviewBefore.getTime()) ||
         (claim.state === "displayed_pending_receipt" && Date.parse(claim.expiresAt) <= now.getTime()) ||
         (claim.state === "consumed" && recovery?.settlementState === "pending" && recovery.graceExpiresAt !== undefined && Date.parse(recovery.graceExpiresAt) <= now.getTime());
-    }).map((claim) => clone(claim)!);
+    }).sort((left, right) => expiryTime(left, this.#leases.get(left.claimId), this.#recoveries.get(left.claimId))
+      .localeCompare(expiryTime(right, this.#leases.get(right.claimId), this.#recoveries.get(right.claimId))) || left.claimId.localeCompare(right.claimId));
+    return { items: matches.slice(0, limit).map((claim) => clone(claim)!), hasMore: matches.length > limit };
   }
 
-  async listExpiredUnclaimedReservations(now: Date): Promise<readonly ExpiredUnclaimedReservation[]> {
+  async listExpiredUnclaimedReservations(now: Date, limit: number): Promise<ExpiryBatch<ExpiredUnclaimedReservation>> {
     const newlyExpired = [...this.#opportunities.values()].flatMap((opportunity) => {
       const outcome = this.#outcomes.get(opportunity.opportunityId);
       return Date.parse(opportunity.expiresAt) <= now.getTime() && !this.#claimByOpportunity.has(opportunity.opportunityId) &&
@@ -563,7 +585,15 @@ export class MemorySponsorshipClaimRepository implements SponsorshipClaimReposit
         ? [{ opportunityId: opportunity.opportunityId, campaignId: outcome.campaignId, reservationId: outcome.reservationId }]
         : [];
     });
-    return [...newlyExpired, ...this.#expiredUnclaimed.values()].filter((value) => !this.#releasedReservations.has(value.reservationId));
+    const byOpportunity = new Map([...newlyExpired, ...this.#expiredUnclaimed.values()]
+      .filter((value) => !this.#releasedReservations.has(value.reservationId))
+      .map((value) => [value.opportunityId, value]));
+    const ordered = [...byOpportunity.values()].sort((left, right) => {
+      const leftExpiry = this.#opportunities.get(left.opportunityId)?.expiresAt ?? "";
+      const rightExpiry = this.#opportunities.get(right.opportunityId)?.expiresAt ?? "";
+      return leftExpiry.localeCompare(rightExpiry) || left.opportunityId.localeCompare(right.opportunityId);
+    });
+    return { items: ordered.slice(0, limit).map((value) => clone(value)!), hasMore: ordered.length > limit };
   }
 
   async expireUnclaimedOpportunity(opportunityId: string): Promise<boolean> {
@@ -596,12 +626,44 @@ export class MemorySponsorshipClaimRepository implements SponsorshipClaimReposit
     });
   }
 
-  async moveToSettlementReview(claimId: string): Promise<boolean> {
+  async cancelUndisplayed(claimId: string): Promise<boolean> {
+    return this.#serial.run(claimId, () => {
+      const claim = this.#claims.get(claimId);
+      const lease = this.#leases.get(claimId);
+      if (!claim || claim.state !== "delivery_leased" || !lease || lease.state !== "active" || this.#recoveries.has(claimId) ||
+        this.#releasedReservations.has(claim.reservationId)) return false;
+      claim.state = "cancelled";
+      lease.state = "cancelled";
+      return true;
+    });
+  }
+
+  async moveToSettlementReview(claimId: string, _now: Date, deadline: Date): Promise<boolean> {
     const claim = this.#claims.get(claimId);
     if (!claim || !["delivery_leased", "displayed_pending_receipt", "consumed"].includes(claim.state)) return false;
     claim.state = "settlement_review";
+    this.#settlementReviewDeadlines.set(claimId, deadline.toISOString());
     const recovery = this.#recoveries.get(claimId);
     if (recovery) recovery.settlementState = "settlement_review";
+    return true;
+  }
+
+  async getSettlementReview(claimId: string): Promise<SettlementReviewResolution | undefined> {
+    const claim = this.#claims.get(claimId);
+    if (!claim || claim.state !== "settlement_review") return undefined;
+    const receipt = this.#recoveries.get(claimId)?.receipt;
+    return { claim: clone(claim)!, ...(receipt ? { receipt: clone(receipt)! } : {}) };
+  }
+
+  async resolveSettlementReview(claimId: string, resolution: "settled" | "released"): Promise<boolean> {
+    const claim = this.#claims.get(claimId);
+    if (!claim || claim.state !== "settlement_review") return false;
+    claim.state = resolution === "settled" ? "consumed" : "expired";
+    const recovery = this.#recoveries.get(claimId);
+    if (recovery) recovery.settlementState = resolution === "settled" ? "settled" : "settlement_review";
+    const lease = this.#leases.get(claimId);
+    if (lease && resolution === "released") lease.state = "expired";
+    this.#settlementReviewDeadlines.delete(claimId);
     return true;
   }
 
@@ -666,7 +728,7 @@ function validateGrantShape(grant: SignedSponsorshipGrant): void {
   const amounts = [payload?.grossAmountMinor, payload?.receiverAmountMinor, payload?.operatorAmountMinor];
   if (grant?.algorithm !== "Ed25519" || !bounded(grant.keyId, "grant key ID") ||
     typeof grant.signature !== "string" || grant.signature.length < 32 || grant.signature.length > 512 || !/^[A-Za-z0-9_-]+$/.test(grant.signature) ||
-    payload?.protocolVersion !== 1 || !bounded(payload.receiverAccountId, "receiver account ID") ||
+    payload?.protocolVersion !== 1 || !bounded(payload.claimId, "claim ID") || !bounded(payload.receiverAccountId, "receiver account ID") ||
     !bounded(payload.receiverProfileId, "receiver profile ID") || !bounded(payload.installationId, "installation ID") ||
     !bounded(payload.deviceKeyThumbprint, "device thumbprint") || !Number.isSafeInteger(payload.consentVersion) || payload.consentVersion < 1 ||
     !bounded(payload.opportunityId, "opportunity ID") || !bounded(payload.placementId, "placement ID") ||
@@ -681,7 +743,7 @@ function validateGrantShape(grant: SignedSponsorshipGrant): void {
   }
   assertOnlyKeys(grant, ["algorithm", "keyId", "payload", "signature"], "Sponsorship grant");
   assertOnlyKeys(payload, [
-    "protocolVersion", "receiverAccountId", "receiverProfileId", "installationId", "deviceKeyThumbprint",
+    "protocolVersion", "claimId", "receiverAccountId", "receiverProfileId", "installationId", "deviceKeyThumbprint",
     "consentVersion", "opportunityId", "placementId", "campaignId", "reservationId", "rewardType",
     "grossAmountMinor", "receiverAmountMinor", "operatorAmountMinor", "currency", "creativeDigest",
     "eligibleBidderCount", "grantDigest", "issuedAt", "expiresAt",
@@ -693,7 +755,9 @@ function assertReceiptBinding(payload: DisplayReceiptPayload, claim: Sponsorship
     payload.reservationId !== claim.reservationId || payload.placementId !== claim.placementId ||
     payload.creativeDigest !== claim.creativeDigest || payload.installationId !== claim.installationId ||
     payload.deviceKeyThumbprint !== claim.deviceKeyThumbprint || payload.policyVersion !== lease.policyVersion ||
-    payload.surface !== "sidebar_session") throw new Error("Display receipt does not match the device-bound claim and lease");
+    (payload.hostKind === "signed-html" ? payload.surface !== "signed_html" : payload.surface !== "sidebar_session")) {
+    throw new Error("Display receipt does not match the device-bound claim and lease");
+  }
 }
 
 function validateReceiptShape(payload: DisplayReceiptPayload): void {
@@ -702,14 +766,14 @@ function validateReceiptShape(payload: DisplayReceiptPayload): void {
     !SHA256.test(payload.creativeDigest) || !bounded(payload.installationId, "installation ID") ||
     !bounded(payload.deviceKeyThumbprint, "device thumbprint") || !["codex", "claude", "signed-html"].includes(payload.hostKind) ||
     !bounded(payload.hostSessionId, "host session ID") || (payload.hostTurnId !== undefined && !bounded(payload.hostTurnId, "host turn ID")) ||
-    !SHA256.test(payload.outputSha256) || !bounded(payload.adapterVersion, "adapter version") ||
-    !bounded(payload.policyVersion, "policy version") || payload.surface !== "sidebar_session" ||
+    !SHA256.test(payload.outputSha256) || !bounded(payload.adapterVersion, "adapter version") || !bounded(payload.hostVersion, "host version") ||
+    !bounded(payload.policyVersion, "policy version") || !["sidebar_session", "signed_html"].includes(payload.surface) ||
     !/^ad-daddy:(test|development|staging|production)$/.test(payload.audience) || !bounded(payload.nonce, "receipt nonce") ||
     !Number.isFinite(Date.parse(payload.displayedAt))) throw new Error("Display receipt payload is malformed");
   assertOnlyKeys(payload, [
     "protocolVersion", "claimId", "grantDigest", "reservationId", "placementId", "creativeDigest",
     "installationId", "deviceKeyThumbprint", "hostKind", "hostSessionId", "hostTurnId", "outputSha256",
-    "adapterVersion", "policyVersion", "surface", "audience", "nonce", "displayedAt",
+    "adapterVersion", "hostVersion", "policyVersion", "surface", "audience", "nonce", "displayedAt",
   ], "Display receipt payload");
 }
 

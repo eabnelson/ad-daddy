@@ -1,6 +1,6 @@
 import { parseBoundedForm, parseBoundedJson, RequestLimitError } from "../../../../../../lib/http/request-limits.ts";
 import {
-  placementDeliveryRepository,
+  getPlacementDeliveryRepository,
 } from "../../../../../../lib/marketplace/placement-registry.ts";
 import {
   applyPlacementReceiverAction,
@@ -8,27 +8,33 @@ import {
   type PlacementDeliveryRepository,
   type PlacementReceiverAction,
 } from "../../../../../../lib/marketplace/placement-delivery.ts";
-import { placementBlocklist, type PlacementBlocklist } from "../../../../../../lib/marketplace/blocking.ts";
+import { getReceiverAdvertiserBlockRepository, type ReceiverAdvertiserBlockRepository } from "../../../../../../lib/marketplace/blocking.ts";
 import { lifecycleEvents, type LifecycleEventStore } from "../../../../../../lib/observability/events.ts";
+import { authenticateAccountRequest } from "../../../../../../lib/auth/account-agent-token.ts";
 
 const RECEIPT_LIMITS = { maxBytes: 4_096, maxDepth: 3, maxCollectionItems: 8, maxStringLength: 128 } as const;
 
 export function createPlacementReceiptHandler(
-  repository: PlacementDeliveryRepository = placementDeliveryRepository,
-  blocklist: PlacementBlocklist = placementBlocklist,
+  repository?: PlacementDeliveryRepository,
+  blocklist?: ReceiverAdvertiserBlockRepository,
   events: LifecycleEventStore = lifecycleEvents,
 ) {
   return async function handle(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
-    const accountId = request.headers.get("oai-authenticated-user-id");
+    const activeRepository = repository ?? await getPlacementDeliveryRepository();
+    const accountId = await authenticateAccountRequest(request, request.method === "GET" ? "placement:read" : "placement:act");
     if (!accountId) return json(401, { error: "human_authentication_required" });
     const { id } = await context.params;
     if (!id || id.length > 128) return json(400, { error: "invalid_placement_id" });
-    const record = await repository.get(id);
+    const record = await activeRepository.get(id);
     if (!record || record.receiverAccountId !== accountId) return json(404, { error: "placement_not_found" });
     if (request.method === "GET") {
       return json(200, publicReceipt(record));
     }
     if (request.method !== "POST") return json(405, { error: "method_not_allowed" });
+    const origin = request.headers.get("origin");
+    if (!request.headers.has("authorization") && origin && origin !== new URL(request.url).origin) {
+      return json(403, { error: "same_origin_required" });
+    }
     try {
       const body = request.headers.get("content-type")?.includes("application/json")
         ? await parseBoundedJson(request, RECEIPT_LIMITS) as { action?: PlacementReceiverAction }
@@ -36,9 +42,12 @@ export function createPlacementReceiptHandler(
       if (!body?.action || !["hide", "block_advertiser", "report"].includes(body.action)) {
         return json(400, { error: "invalid_receiver_action" });
       }
-      const updated = await applyPlacementReceiverAction(repository, id, accountId, body.action);
       if (body.action === "block_advertiser") {
-        blocklist.block(accountId, record.validatedCreative.payload.advertiser.id);
+        await (blocklist ?? await getReceiverAdvertiserBlockRepository())
+          .block(accountId, record.validatedCreative.payload.advertiser.id, id);
+      }
+      const updated = await applyPlacementReceiverAction(activeRepository, id, accountId, body.action);
+      if (body.action === "block_advertiser") {
         events.record({ eventId: `block:${id}`, type: "advertiser_blocked", occurredAt: updated.updatedAt, receiverAccountId: accountId, advertiserId: record.validatedCreative.payload.advertiser.id, placementId: id });
       }
       if (body.action === "report") {

@@ -10,6 +10,10 @@ import {
 } from "./codex-app-server.js";
 import { canonicalJson, type SignedPlacement, validateSignedPlacement } from "./contract.js";
 import { deliverGenericPlacement, type GenericPlacementReceipt } from "./generic.js";
+import {
+  type ClaimedPlacementEnvelope,
+  validateClaimedPlacementEnvelope,
+} from "./sponsorship-contract.js";
 
 export interface ClearedPlacementEnvelope {
   receiverAccountId: string;
@@ -22,6 +26,7 @@ export interface AuthorizedCodexHostContext {
   installationId: string;
   isolatedCwd: string;
   model?: string;
+  deploymentEnvironment?: "development" | "test" | "staging" | "production";
   createConnection: () => Promise<CodexAppServerConnection>;
   readActiveTaskId: () => Promise<string | null>;
   verifySidebarVisibility?: (input: { threadId: string; title: string }) => Promise<boolean>;
@@ -32,14 +37,25 @@ export interface LocalDeliveryRecord {
   receiverAccountId: string;
   installationId: string;
   signedPlacementSha256: string;
+  claimId?: string;
+  grantDigest?: string;
+  leaseId?: string;
   status: "pending" | "native" | "fallback";
   hostSessionId?: string;
   hostTurnId?: string;
   hostInstructionSourcesVerified?: boolean;
   hostInstructionSources?: string[];
   nativeFailureCode?: string;
+  fallbackOutputSha256?: string;
   receipt?: CodexDeliveryReceipt | GenericPlacementReceipt;
+  displayedAt?: string;
   updatedAt: string;
+}
+
+export interface VerifiedFallbackPresentation {
+  verified: true;
+  displayedAt: string;
+  outputSha256: string;
 }
 
 export interface LocalDeliveryStateStore {
@@ -106,7 +122,7 @@ export class CodexLocalDeliveryRuntime {
   readonly #authorizeHost: (
     placement: ClearedPlacementEnvelope,
   ) => Promise<AuthorizedCodexHostContext>;
-  readonly #presentFallback: (receipt: GenericPlacementReceipt) => Promise<void>;
+  readonly #presentFallback: (receipt: GenericPlacementReceipt) => Promise<VerifiedFallbackPresentation | void>;
   readonly #inFlight = new Map<string, Promise<LocalPlacementDeliveryResult>>();
 
   constructor(input: {
@@ -115,7 +131,7 @@ export class CodexLocalDeliveryRuntime {
     authorizeHost: (
       placement: ClearedPlacementEnvelope,
     ) => Promise<AuthorizedCodexHostContext>;
-    presentFallback: (receipt: GenericPlacementReceipt) => Promise<void>;
+    presentFallback: (receipt: GenericPlacementReceipt) => Promise<VerifiedFallbackPresentation | void>;
   }) {
     if (!input.marketplacePublicKeyPem.trim()) {
       throw new Error("A pinned marketplace public key is required");
@@ -127,7 +143,7 @@ export class CodexLocalDeliveryRuntime {
   }
 
   async deliver(response: unknown, now = new Date()): Promise<LocalPlacementDeliveryResult> {
-    const envelope = parseClearedPlacementEnvelope(response);
+    const envelope = parsePlacementEnvelope(response);
     if (!envelope) return { status: "no_placement" };
     const placementId = envelope.placement.payload.placementId;
     const active = this.#inFlight.get(placementId);
@@ -139,15 +155,34 @@ export class CodexLocalDeliveryRuntime {
     return delivery;
   }
 
+  async recover(placementId: string): Promise<LocalPlacementDeliveryResult> {
+    const record = await this.#store.get(placementId);
+    if (!record?.receipt) return { status: "no_placement" };
+    return { status: record.status as "native" | "fallback", record };
+  }
+
   private async deliverOnce(
-    envelope: ClearedPlacementEnvelope,
+    inputEnvelope: ClearedPlacementEnvelope | ClaimedPlacementEnvelope,
     now: Date,
   ): Promise<LocalPlacementDeliveryResult> {
-    const payload = validateSignedPlacement(
-      envelope.placement,
-      this.#marketplacePublicKeyPem,
-      now,
-    );
+    const isClaimed = "grant" in inputEnvelope;
+    const claimed = isClaimed
+      ? validateClaimedPlacementEnvelope(inputEnvelope, this.#marketplacePublicKeyPem, now)
+      : undefined;
+    const envelope: ClearedPlacementEnvelope = isClaimed ? {
+      receiverAccountId: claimed!.receiverAccountId,
+      installationId: claimed!.installationId,
+      placement: inputEnvelope.placement,
+    } : inputEnvelope as ClearedPlacementEnvelope;
+    // validateClaimedPlacementEnvelope already verifies this exact signed
+    // placement. Direct envelopes still need their own signature check.
+    const payload = isClaimed
+      ? inputEnvelope.placement.payload
+      : validateSignedPlacement(
+          envelope.placement,
+          this.#marketplacePublicKeyPem,
+          now,
+        );
     const host = await this.#authorizeHost(envelope);
     if (
       host.receiverAccountId !== envelope.receiverAccountId ||
@@ -164,7 +199,10 @@ export class CodexLocalDeliveryRuntime {
       if (
         record.receiverAccountId !== envelope.receiverAccountId ||
         record.installationId !== envelope.installationId ||
-        record.signedPlacementSha256 !== signedPlacementSha256
+        record.signedPlacementSha256 !== signedPlacementSha256 ||
+        record.claimId !== claimed?.claimId ||
+        record.grantDigest !== claimed?.grantDigest ||
+        record.leaseId !== ("lease" in inputEnvelope ? inputEnvelope.lease.leaseId : undefined)
       ) {
         throw new Error("Local placement idempotency collision");
       }
@@ -175,6 +213,9 @@ export class CodexLocalDeliveryRuntime {
         receiverAccountId: envelope.receiverAccountId,
         installationId: envelope.installationId,
         signedPlacementSha256,
+        claimId: claimed?.claimId,
+        grantDigest: claimed?.grantDigest,
+        leaseId: "lease" in inputEnvelope ? inputEnvelope.lease.leaseId : undefined,
         status: "pending",
         updatedAt: now.toISOString(),
       };
@@ -192,6 +233,7 @@ export class CodexLocalDeliveryRuntime {
         readActiveTaskId: host.readActiveTaskId,
         verifySidebarVisibility: host.verifySidebarVisibility,
         model: host.model,
+        deploymentEnvironment: host.deploymentEnvironment,
         now,
         existingHostIdentifiers: record.hostSessionId
           ? {
@@ -216,6 +258,7 @@ export class CodexLocalDeliveryRuntime {
         },
       });
       if (native.delivered) {
+        const displayedAt = new Date().toISOString();
         record = {
           ...record,
           status: "native",
@@ -223,7 +266,8 @@ export class CodexLocalDeliveryRuntime {
           hostTurnId: native.receipt.turnId,
           nativeFailureCode: undefined,
           receipt: native.receipt,
-          updatedAt: new Date().toISOString(),
+          displayedAt,
+          updatedAt: displayedAt,
         };
         await this.#store.put(record);
         return { status: "native", record };
@@ -236,6 +280,10 @@ export class CodexLocalDeliveryRuntime {
       await this.#store.put(record);
     }
 
+    if (record.hostTurnId) {
+      throw new Error("Native sponsored task may already be visible; signed-HTML fallback is suppressed to prevent a second surface");
+    }
+
     const fallback = deliverGenericPlacement({
       placement: envelope.placement,
       publicKeyPem: this.#marketplacePublicKeyPem,
@@ -243,12 +291,18 @@ export class CodexLocalDeliveryRuntime {
       now,
     });
     if (!fallback.delivered) throw new Error(fallback.reason);
-    await this.#presentFallback(fallback.receipt);
+    const presentation = await this.#presentFallback(fallback.receipt);
+    if (!verifiedFallbackPresentation(presentation)) {
+      throw new Error("Signed-HTML fallback display was not verified; no display receipt was created");
+    }
+    const displayedAt = presentation.displayedAt;
     record = {
       ...record,
       status: "fallback",
       receipt: fallback.receipt,
-      updatedAt: new Date().toISOString(),
+      fallbackOutputSha256: presentation.outputSha256,
+      displayedAt,
+      updatedAt: displayedAt,
     };
     await this.#store.put(record);
     return { status: "fallback", record };
@@ -261,25 +315,38 @@ export function environmentCodexHostAuthorization(input: {
   isolatedCwd: string;
   environment?: NodeJS.ProcessEnv;
   model?: string;
+  deploymentEnvironment?: "development" | "test" | "staging" | "production";
 }): (placement: ClearedPlacementEnvelope) => Promise<AuthorizedCodexHostContext> {
   const environment = input.environment ?? process.env;
+  const deploymentEnvironment = input.deploymentEnvironment ?? deliveryEnvironment(environment.AD_DADDY_ENV);
   return async () => {
     return {
       receiverAccountId: input.receiverAccountId,
       installationId: input.installationId,
       isolatedCwd: input.isolatedCwd,
       model: input.model,
+      deploymentEnvironment,
       createConnection: () => createCodexAppServerConnection(),
       readActiveTaskId: async () => environment.CODEX_THREAD_ID ?? null,
     };
   };
 }
 
-function parseClearedPlacementEnvelope(value: unknown): ClearedPlacementEnvelope | null {
+function deliveryEnvironment(value: string | undefined): "development" | "test" | "staging" | "production" {
+  return value === "test" || value === "staging" || value === "production" ? value : "development";
+}
+
+function parsePlacementEnvelope(value: unknown): ClearedPlacementEnvelope | ClaimedPlacementEnvelope | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const candidate = value as Partial<ClearedPlacementEnvelope> & { status?: unknown };
+  const candidate = value as Partial<ClearedPlacementEnvelope & ClaimedPlacementEnvelope> & { status?: unknown };
   if (candidate.status === "no_fill" || candidate.status === "no_placement") return null;
   if (!("placement" in candidate)) return null;
+  if ("grant" in candidate || "lease" in candidate || "claimId" in candidate) {
+    if (!candidate.claimId || !candidate.grant || !candidate.lease || !candidate.placement) {
+      throw new Error("Claimed placement envelope is incomplete");
+    }
+    return candidate as ClaimedPlacementEnvelope;
+  }
   if (
     typeof candidate.receiverAccountId !== "string" ||
     !candidate.receiverAccountId ||
@@ -307,11 +374,21 @@ function assertDeliveryRecord(value: unknown): asserts value is LocalDeliveryRec
     typeof record.installationId !== "string" ||
     !record.installationId ||
     !/^[a-f0-9]{64}$/.test(record.signedPlacementSha256 ?? "") ||
+    (record.claimId !== undefined && (typeof record.claimId !== "string" || !record.claimId)) ||
+    (record.grantDigest !== undefined && !/^[a-f0-9]{64}$/.test(record.grantDigest)) ||
+    (record.leaseId !== undefined && (typeof record.leaseId !== "string" || !record.leaseId)) ||
+    (record.fallbackOutputSha256 !== undefined && !/^[a-f0-9]{64}$/.test(record.fallbackOutputSha256)) ||
+    (record.displayedAt !== undefined && !Number.isFinite(Date.parse(record.displayedAt))) ||
     !["pending", "native", "fallback"].includes(record.status ?? "") ||
     !Number.isFinite(Date.parse(record.updatedAt ?? ""))
   ) {
     throw new Error("Malformed local delivery record");
   }
+}
+
+function verifiedFallbackPresentation(value: VerifiedFallbackPresentation | void): value is VerifiedFallbackPresentation {
+  return Boolean(value && value.verified === true && /^[a-f0-9]{64}$/.test(value.outputSha256) &&
+    Number.isFinite(Date.parse(value.displayedAt)));
 }
 
 function clone<T>(value: T | undefined): T | undefined {

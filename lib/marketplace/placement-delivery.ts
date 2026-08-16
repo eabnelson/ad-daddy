@@ -26,6 +26,14 @@ export type PlacementDeliveryStatus =
 
 export type PlacementReceiverAction = "hide" | "block_advertiser" | "report";
 
+export interface VerifiedDisplayReceiptSummary {
+  placementId: string;
+  verified: true;
+  surface: "sidebar_session" | "signed_html";
+  hostKind: "codex" | "claude" | "signed-html";
+  displayedAt: string;
+}
+
 export interface PlacementDeliveryRecord {
   placementId: string;
   receiverAccountId: string;
@@ -37,7 +45,7 @@ export interface PlacementDeliveryRecord {
   hostTurnId?: string;
   hostInstructionSourcesVerified?: boolean;
   hostInstructionSources?: string[];
-  receipt?: CodexDeliveryReceipt | GenericPlacementReceipt;
+  receipt?: CodexDeliveryReceipt | GenericPlacementReceipt | VerifiedDisplayReceiptSummary;
   lastFailureCode?: string;
   receiverAction?: PlacementReceiverAction;
   marketContext?: {
@@ -51,22 +59,34 @@ export interface PlacementDeliveryRecord {
   updatedAt: string;
 }
 
+export interface PlacementPageInput {
+  limit: number;
+  cursor?: string;
+}
+
+export interface PlacementDeliveryPage {
+  placements: readonly PlacementDeliveryRecord[];
+  nextCursor: string | null;
+}
+
+export class PlacementPaginationError extends Error {}
+
 export interface PlacementDeliveryRepository {
   get(placementId: string): Promise<PlacementDeliveryRecord | undefined>;
   put(record: PlacementDeliveryRecord): Promise<void>;
-  listByReceiver(receiverAccountId: string): Promise<readonly PlacementDeliveryRecord[]>;
-  listByCampaign(campaignId: string): Promise<readonly PlacementDeliveryRecord[]>;
+  listByReceiver(receiverAccountId: string, input: PlacementPageInput): Promise<PlacementDeliveryPage>;
+  listByCampaign(campaignId: string, input: PlacementPageInput): Promise<PlacementDeliveryPage>;
 }
 
 export class MemoryPlacementDeliveryRepository implements PlacementDeliveryRepository {
   readonly #records = new Map<string, PlacementDeliveryRecord>();
   async get(placementId: string) { return clone(this.#records.get(placementId)); }
   async put(record: PlacementDeliveryRecord) { this.#records.set(record.placementId, clone(record)!); }
-  async listByReceiver(receiverAccountId: string) {
-    return [...this.#records.values()].filter((record) => record.receiverAccountId === receiverAccountId).map((record) => clone(record)!);
+  async listByReceiver(receiverAccountId: string, input: PlacementPageInput) {
+    return page([...this.#records.values()].filter((record) => record.receiverAccountId === receiverAccountId), input);
   }
-  async listByCampaign(campaignId: string) {
-    return [...this.#records.values()].filter((record) => record.marketContext?.campaignId === campaignId).map((record) => clone(record)!);
+  async listByCampaign(campaignId: string, input: PlacementPageInput) {
+    return page([...this.#records.values()].filter((record) => record.marketContext?.campaignId === campaignId), input);
   }
 }
 
@@ -259,6 +279,39 @@ export function applyPlacementReceiverAction(
 
 function fingerprint(value: unknown): string { return JSON.stringify(value); }
 function clone<T>(value: T | undefined): T | undefined { return value === undefined ? undefined : structuredClone(value); }
+
+export function encodePlacementCursor(record: Pick<PlacementDeliveryRecord, "placementId" | "updatedAt">): string {
+  return Buffer.from(`${record.updatedAt}\0${record.placementId}`).toString("base64url");
+}
+
+export function decodePlacementCursor(cursor: string): { updatedAt: string; placementId: string } {
+  if (!cursor || cursor.length > 512 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw new PlacementPaginationError("Invalid placement cursor");
+  const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  if (Buffer.from(decoded).toString("base64url") !== cursor) throw new PlacementPaginationError("Invalid placement cursor");
+  const separator = decoded.indexOf("\0");
+  if (separator < 1 || decoded.indexOf("\0", separator + 1) !== -1) throw new PlacementPaginationError("Invalid placement cursor");
+  const updatedAt = decoded.slice(0, separator);
+  const placementId = decoded.slice(separator + 1);
+  if (!Number.isFinite(Date.parse(updatedAt)) || !placementId || placementId.length > 128) throw new PlacementPaginationError("Invalid placement cursor");
+  return { updatedAt, placementId };
+}
+
+function page(records: readonly PlacementDeliveryRecord[], input: PlacementPageInput): PlacementDeliveryPage {
+  assertPageInput(input);
+  const cursor = input.cursor ? decodePlacementCursor(input.cursor) : undefined;
+  const ordered = records
+    .filter((record) => !cursor || record.updatedAt < cursor.updatedAt ||
+      (record.updatedAt === cursor.updatedAt && record.placementId < cursor.placementId))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.placementId.localeCompare(left.placementId));
+  const hasMore = ordered.length > input.limit;
+  const placements = ordered.slice(0, input.limit).map((record) => clone(record)!);
+  return { placements, nextCursor: hasMore ? encodePlacementCursor(placements.at(-1)!) : null };
+}
+
+export function assertPageInput(input: PlacementPageInput): void {
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100) throw new PlacementPaginationError("Invalid placement page size");
+  if (input.cursor !== undefined) decodePlacementCursor(input.cursor);
+}
 
 function validateMarketContext(context: NonNullable<PlacementDeliveryRecord["marketContext"]>, displayedReceiverMinor: number) {
   if (!context.campaignId || context.campaignId.length > 128 || !Number.isSafeInteger(context.eligibleBidderCount) || context.eligibleBidderCount < 1 ||

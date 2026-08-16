@@ -58,18 +58,18 @@ test("cash activation needs a payout address while credits-only does not", async
   await assert.doesNotReject(setup.activate({ installationId: "installation-1", disclosureAccepted: true, termsAccepted: true, privacyAccepted: true }));
 });
 
-test("rerun updates one installation; pause increments consent and stops checks", async () => {
+test("rerunning a draft edits one next consent version; pause stops checks", async () => {
   const store = new MemoryLocalStore();
   const revoked: number[] = [];
   const setup = new ReceiverSetupService(store, { revokeConsent: async (_id, version) => { revoked.push(version); } });
   await setup.prepare(base);
   await setup.prepare({ ...base, cadenceMinutes: 120 });
   assert.equal((await store.list()).length, 1);
-  assert.equal((await store.get("installation-1"))?.consentVersion, 2);
+  assert.equal((await store.get("installation-1"))?.consentVersion, 1);
   await setup.pause("installation-1");
   assert.equal((await store.get("installation-1"))?.status, "paused");
-  assert.equal((await store.get("installation-1"))?.consentVersion, 3);
-  assert.deepEqual(revoked, [2]);
+  assert.equal((await store.get("installation-1"))?.consentVersion, 1);
+  assert.deepEqual(revoked, [1]);
 });
 
 test("payout change stays pending until recent human approval", async () => {

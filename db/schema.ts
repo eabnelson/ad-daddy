@@ -147,10 +147,12 @@ export const receiverProfiles = sqliteTable("receiver_profiles", {
   installationId: text("installation_id").notNull().references(() => installations.id),
   status: text("status", { enum: ["draft", "active", "paused", "revoked"] }).notNull().default("draft"),
   currentConsentVersion: integer("current_consent_version").notNull().default(0),
+  configJson: text("config_json").notNull().default("{}"),
   createdAt: createdAt(),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [
   uniqueIndex("receiver_profile_installation_unique").on(table.installationId),
+  index("receiver_profile_account_idx").on(table.accountId, table.id),
   check("receiver_consent_version_nonnegative", sql`${table.currentConsentVersion} >= 0`),
 ]);
 
@@ -201,6 +203,20 @@ export const advertiserTermsAcceptances = sqliteTable("advertiser_terms_acceptan
   approvalId: text("approval_id").notNull(),
 }, (table) => [primaryKey({ columns: [table.accountId, table.version] })]);
 
+export const humanApprovalCapabilities = sqliteTable("human_approval_capabilities", {
+  id: text("id").primaryKey(),
+  accountId: text("account_id").notNull().references(() => humanAccounts.id),
+  purpose: text("purpose", { enum: ["device_enroll", "campaign_fund", "campaign_activate", "campaign_close"] }).notNull(),
+  resourceFingerprint: text("resource_fingerprint").notNull(),
+  approvedAt: text("approved_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  consumedBy: text("consumed_by"),
+  consumedAt: text("consumed_at"),
+  createdAt: createdAt(),
+}, (table) => [
+  index("human_approval_account_expiry_idx").on(table.accountId, table.expiresAt),
+]);
+
 export const campaigns = sqliteTable("campaigns", {
   id: text("id").primaryKey(),
   accountId: text("account_id").notNull().references(() => humanAccounts.id),
@@ -219,13 +235,15 @@ export const campaigns = sqliteTable("campaigns", {
   dailyCapMinor: integer("daily_cap_minor").notNull(),
   fundedMinor: integer("funded_minor").notNull().default(0),
   spentMinor: integer("spent_minor").notNull().default(0),
+  refundedMinor: integer("refunded_minor").notNull().default(0),
+  termsAcceptedAt: text("terms_accepted_at"),
   activatedAt: text("activated_at"),
   closedAt: text("closed_at"),
   createdAt: createdAt(),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 }, (table) => [
   index("campaign_account_status_idx").on(table.accountId, table.status),
-  check("campaign_amounts_nonnegative", sql`${table.maximumSpendMinor} >= 0 AND ${table.maximumBidMinor} >= 0 AND ${table.dailyCapMinor} >= 0 AND ${table.fundedMinor} >= 0 AND ${table.spentMinor} >= 0`),
+  check("campaign_amounts_nonnegative", sql`${table.maximumSpendMinor} >= 0 AND ${table.maximumBidMinor} >= 0 AND ${table.dailyCapMinor} >= 0 AND ${table.fundedMinor} >= 0 AND ${table.spentMinor} >= 0 AND ${table.refundedMinor} >= 0`),
   check("campaign_bid_within_spend", sql`${table.maximumBidMinor} <= ${table.maximumSpendMinor}`),
   check("campaign_daily_within_spend", sql`${table.dailyCapMinor} <= ${table.maximumSpendMinor}`),
   check("campaign_spend_within_funds", sql`${table.spentMinor} <= ${table.fundedMinor}`),
@@ -253,12 +271,24 @@ export const campaignBudgetHolds = sqliteTable("campaign_budget_holds", {
   campaignId: text("campaign_id").notNull().references(() => campaigns.id),
   reason: text("reason").notNull(),
   amountMinor: integer("amount_minor").notNull(),
-  status: text("status", { enum: ["active", "released"] }).notNull(),
+  status: text("status", { enum: ["active", "released", "committed"] }).notNull(),
   createdAt: createdAt(),
   releasedAt: text("released_at"),
+  committedAt: text("committed_at"),
 }, (table) => [
   index("campaign_hold_status_idx").on(table.campaignId, table.status),
   check("campaign_hold_amount_positive", sql`${table.amountMinor} > 0`),
+]);
+
+export const campaignRefundWithdrawals = sqliteTable("campaign_refund_withdrawals", {
+  refundId: text("refund_id").primaryKey(),
+  campaignId: text("campaign_id").notNull().references(() => campaigns.id),
+  amountMinor: integer("amount_minor").notNull(),
+  appliedAt: text("applied_at"),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("campaign_refund_withdrawal_campaign_unique").on(table.campaignId),
+  check("campaign_refund_withdrawal_amount_positive", sql`${table.amountMinor} > 0`),
 ]);
 
 export const campaignAgentTokens = sqliteTable("campaign_agent_tokens", {
@@ -279,6 +309,20 @@ export const campaignAgentTokens = sqliteTable("campaign_agent_tokens", {
   check("campaign_agent_token_ceilings_nonnegative", sql`${table.spendCeilingMinor} >= 0 AND ${table.spentMinor} >= 0 AND ${table.bidCeilingMinor} >= 0`),
   check("campaign_agent_token_bid_within_spend", sql`${table.bidCeilingMinor} <= ${table.spendCeilingMinor}`),
   check("campaign_agent_token_spent_within_ceiling", sql`${table.spentMinor} <= ${table.spendCeilingMinor}`),
+]);
+
+export const campaignAgentTokenSpends = sqliteTable("campaign_agent_token_spends", {
+  tokenId: text("token_id").notNull().references(() => campaignAgentTokens.id),
+  idempotencyKey: text("idempotency_key").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  status: text("status", { enum: ["authorized", "committed", "released"] }).notNull(),
+  createdAt: createdAt(),
+  committedAt: text("committed_at"),
+  releasedAt: text("released_at"),
+}, (table) => [
+  primaryKey({ columns: [table.tokenId, table.idempotencyKey] }),
+  index("campaign_agent_token_spend_status_idx").on(table.tokenId, table.status),
+  check("campaign_agent_token_spend_amount_positive", sql`${table.amountMinor} > 0`),
 ]);
 
 export const revenueSplitVersions = sqliteTable("revenue_split_versions", {
@@ -306,6 +350,7 @@ export const opportunities = sqliteTable("opportunities", {
 }, (table) => [
   uniqueIndex("rotating_opportunity_id_unique").on(table.rotatingOpportunityId),
   index("opportunity_receiver_state_idx").on(table.receiverProfileId, table.state),
+  index("opportunity_expiry_order_idx").on(table.state, table.expiresAt, table.id),
   check("opportunity_consent_version_positive", sql`${table.consentVersion} > 0`),
 ]);
 
@@ -339,6 +384,7 @@ export const auctionBids = sqliteTable("auction_bids", {
 }, (table) => [
   uniqueIndex("auction_bid_campaign_unique").on(table.auctionId, table.campaignId),
   index("auction_bid_rank_idx").on(table.auctionId, table.grossAmountMinor),
+  index("auction_bid_campaign_lookup_idx").on(table.campaignId, table.auctionId),
   check("auction_bid_amounts_nonnegative", sql`${table.grossAmountMinor} >= 0 AND ${table.receiverAmountMinor} >= 0 AND ${table.operatorAmountMinor} >= 0`),
   check("auction_bid_split_balanced", sql`${table.receiverAmountMinor} + ${table.operatorAmountMinor} = ${table.grossAmountMinor}`),
 ]);
@@ -372,6 +418,7 @@ export const placements = sqliteTable("placements", {
   hostTurnId: text("host_turn_id"),
   hostKind: text("host_kind", { enum: ["codex", "claude", "signed-html"] }),
   deliveryStatus: text("delivery_status", { enum: ["verifying", "ready", "displaying", "delivered", "fallback", "expired", "blocked", "reported"] }).notNull().default("verifying"),
+  receiverAction: text("receiver_action", { enum: ["hide", "block_advertiser", "report"] }),
   signedPlacementJson: text("signed_placement_json"),
   renderedResponse: text("rendered_response"),
   renderedResponseSha256: text("rendered_response_sha256"),
@@ -383,15 +430,27 @@ export const placements = sqliteTable("placements", {
 }, (table) => [
   uniqueIndex("placement_opportunity_unique").on(table.opportunityId),
   uniqueIndex("placement_idempotency_unique").on(table.idempotencyKey),
+  index("placement_updated_feed_idx").on(table.updatedAt, table.id),
   check("placement_amounts_nonnegative", sql`${table.grossAmountMinor} >= 0 AND ${table.receiverAmountMinor} >= 0 AND ${table.operatorAmountMinor} >= 0`),
   check("placement_split_balanced", sql`${table.receiverAmountMinor} + ${table.operatorAmountMinor} = ${table.grossAmountMinor}`),
+]);
+
+export const receiverAdvertiserBlocks = sqliteTable("receiver_advertiser_blocks", {
+  receiverAccountId: text("receiver_account_id").notNull().references(() => humanAccounts.id),
+  advertiserId: text("advertiser_id").notNull().references(() => advertiserBrands.id),
+  sourcePlacementId: text("source_placement_id").references(() => placements.id),
+  blockedAt: text("blocked_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.receiverAccountId, table.advertiserId] }),
+  index("receiver_advertiser_block_advertiser_idx").on(table.advertiserId, table.receiverAccountId),
 ]);
 
 export const placementClaims = sqliteTable("placement_claims", {
   id: text("id").primaryKey(),
   placementId: text("placement_id").notNull().references(() => placements.id),
   opportunityId: text("opportunity_id").notNull().references(() => opportunities.id),
-  reservationId: text("reservation_id").notNull().references(() => campaignBudgetReservations.id),
+  reservationId: text("reservation_id").references(() => campaignBudgetReservations.id),
+  rewardReferenceId: text("reward_reference_id").notNull(),
   receiverProfileId: text("receiver_profile_id").notNull().references(() => receiverProfiles.id),
   installationId: text("installation_id").notNull().references(() => installations.id),
   consentVersion: integer("consent_version").notNull(),
@@ -403,13 +462,18 @@ export const placementClaims = sqliteTable("placement_claims", {
   expiresAt: text("expires_at").notNull(),
   consumedAt: text("consumed_at"),
   cancelledAt: text("cancelled_at"),
+  settlementReviewStartedAt: text("settlement_review_started_at"),
+  settlementReviewDeadlineAt: text("settlement_review_deadline_at"),
 }, (table) => [
   uniqueIndex("placement_claim_placement_unique").on(table.placementId),
   uniqueIndex("placement_claim_opportunity_unique").on(table.opportunityId),
   uniqueIndex("placement_claim_reservation_unique").on(table.reservationId),
+  uniqueIndex("placement_claim_reward_reference_unique").on(table.rewardReferenceId),
   index("placement_claim_installation_state_idx").on(table.installationId, table.state),
   index("placement_claim_expiry_idx").on(table.state, table.expiresAt),
+  index("placement_claim_expiry_order_idx").on(table.state, table.expiresAt, table.id),
   check("placement_claim_consent_version_positive", sql`${table.consentVersion} > 0`),
+  check("placement_claim_reward_reference_valid", sql`(${table.reservationId} IS NOT NULL AND ${table.rewardReferenceId} = ${table.reservationId}) OR (${table.reservationId} IS NULL AND ${table.rewardReferenceId} LIKE 'offer:%')`),
 ]);
 
 export const placementDeliveryLeases = sqliteTable("placement_delivery_leases", {
@@ -426,6 +490,7 @@ export const placementDeliveryLeases = sqliteTable("placement_delivery_leases", 
 }, (table) => [
   uniqueIndex("placement_delivery_lease_claim_unique").on(table.claimId),
   index("placement_delivery_lease_expiry_idx").on(table.state, table.expiresAt),
+  index("placement_delivery_lease_expiry_order_idx").on(table.state, table.expiresAt, table.claimId),
 ]);
 
 export const placementReceiptRecovery = sqliteTable("placement_receipt_recovery", {
@@ -433,6 +498,7 @@ export const placementReceiptRecovery = sqliteTable("placement_receipt_recovery"
   placementId: text("placement_id").notNull().references(() => placements.id),
   leaseId: text("lease_id").notNull().references(() => placementDeliveryLeases.id),
   displayReceiptDigest: text("display_receipt_digest").notNull(),
+  displayReceiptJson: text("display_receipt_json"),
   state: text("state", { enum: ["pending", "submitted", "settlement_review", "settled", "cancelled"] }).notNull().default("pending"),
   policyVersion: text("policy_version").notNull(),
   resolutionAuthority: text("resolution_authority", { enum: ["operator_dual_control"] }).notNull(),
@@ -445,6 +511,17 @@ export const placementReceiptRecovery = sqliteTable("placement_receipt_recovery"
 }, (table) => [
   uniqueIndex("placement_receipt_recovery_placement_unique").on(table.placementId),
   index("placement_receipt_recovery_deadline_idx").on(table.state, table.graceExpiresAt, table.settlementReviewDeadlineAt),
+  index("placement_receipt_recovery_grace_order_idx").on(table.state, table.graceExpiresAt, table.claimId),
+]);
+
+export const settlementReviewApprovals = sqliteTable("settlement_review_approvals", {
+  claimId: text("claim_id").notNull().references(() => placementClaims.id),
+  operatorAccountId: text("operator_account_id").notNull().references(() => humanAccounts.id),
+  resolution: text("resolution", { enum: ["settled", "released"] }).notNull(),
+  approvedAt: text("approved_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.claimId, table.operatorAccountId] }),
+  index("settlement_review_approval_resolution_idx").on(table.claimId, table.resolution),
 ]);
 
 export const placementMeasurementEvents = sqliteTable("placement_measurement_events", {

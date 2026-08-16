@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -6,10 +7,12 @@ import test from "node:test";
 
 import {
   CodexLocalDeliveryRuntime,
+  canonicalJson,
   JsonLocalDeliveryStateStore,
   type AuthorizedCodexHostContext,
   type CodexAppServerConnection,
   type ClearedPlacementEnvelope,
+  type ClaimedPlacementEnvelope,
 } from "../../packages/host-adapters/dist/index.js";
 import {
   SIGNED_PLACEMENT_FIXTURE,
@@ -44,6 +47,37 @@ test("a cleared placement uses the receiver-authorized Codex context and survive
   }
 });
 
+test("a device-bound claimed placement reaches the host only after grant and lease verification", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ad-daddy-delivery-"));
+  try {
+    const marketplace = generateKeyPairSync("ed25519");
+    const privateKeyPem = marketplace.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const publicKeyPem = marketplace.publicKey.export({ type: "spki", format: "pem" }).toString();
+    const claimed = claimedEnvelope(privateKeyPem);
+    const host = new RuntimeHost();
+    const delivery = new CodexLocalDeliveryRuntime({
+      store: new JsonLocalDeliveryStateStore(join(directory, "deliveries.json")),
+      marketplacePublicKeyPem: publicKeyPem,
+      authorizeHost: async () => host.context(),
+      presentFallback: async () => {},
+    });
+    const result = await delivery.deliver(claimed, NOW);
+    assert.equal(result.status, "native");
+    assert.equal(result.status === "native" && result.record.claimId, claimed.claimId);
+    assert.equal(host.threadStartCount, 1);
+
+    const rejectedHost = new RuntimeHost();
+    const rejected = new CodexLocalDeliveryRuntime({
+      store: new JsonLocalDeliveryStateStore(join(directory, "rejected.json")), marketplacePublicKeyPem: publicKeyPem,
+      authorizeHost: async () => rejectedHost.context(), presentFallback: async () => {},
+    });
+    await assert.rejects(rejected.deliver({ ...claimed, claimId: "claim_tampered" }, NOW), /different claim/);
+    assert.equal(rejectedHost.threadStartCount, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("instruction isolation failure records one empty task and presents the signed fallback once", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ad-daddy-delivery-"));
   try {
@@ -54,7 +88,14 @@ test("instruction isolation failure records one empty task and presents the sign
       store: new JsonLocalDeliveryStateStore(statePath),
       marketplacePublicKeyPem: TEST_MARKETPLACE_PUBLIC_KEY_PEM,
       authorizeHost: async () => host.context(),
-      presentFallback: async () => { fallbackPresentations += 1; },
+      presentFallback: async (receipt) => {
+        fallbackPresentations += 1;
+        return {
+          verified: true,
+          displayedAt: NOW.toISOString(),
+          outputSha256: createHash("sha256").update(canonicalJson(receipt)).digest("hex"),
+        };
+      },
     });
 
     const first = await createRuntime().deliver(envelope(), NOW);
@@ -66,6 +107,89 @@ test("instruction isolation failure records one empty task and presents the sign
     assert.equal(host.threadStartCount, 1);
     assert.equal(host.turnStartCount, 0);
     assert.equal(fallbackPresentations, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("writing fallback metadata is not a verified signed-HTML display and cannot produce a receipt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ad-daddy-delivery-"));
+  try {
+    const host = new RuntimeHost({ instructionSources: ["/workspace/AGENTS.md"] });
+    const store = new JsonLocalDeliveryStateStore(join(directory, "deliveries.json"));
+    const delivery = new CodexLocalDeliveryRuntime({
+      store,
+      marketplacePublicKeyPem: TEST_MARKETPLACE_PUBLIC_KEY_PEM,
+      authorizeHost: async () => host.context(),
+      presentFallback: async () => undefined,
+    });
+
+    await assert.rejects(delivery.deliver(envelope(), NOW), /fallback.*not verified|verified.*fallback/i);
+    const persisted = await store.get(envelope().placement.payload.placementId);
+    assert.equal(persisted?.status, "pending");
+    assert.equal(persisted?.receipt, undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a native failure after a display turn starts suppresses fallback to prevent a second surface", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ad-daddy-delivery-"));
+  try {
+    const host = new RuntimeHost({ output: "This response is missing the required sponsored fields." });
+    let fallbackPresentations = 0;
+    const store = new JsonLocalDeliveryStateStore(join(directory, "deliveries.json"));
+    const delivery = new CodexLocalDeliveryRuntime({
+      store,
+      marketplacePublicKeyPem: TEST_MARKETPLACE_PUBLIC_KEY_PEM,
+      authorizeHost: async () => host.context(),
+      presentFallback: async () => { fallbackPresentations += 1; },
+    });
+
+    await assert.rejects(delivery.deliver(envelope(), NOW), /fallback.*suppressed|may already be visible/i);
+    assert.equal(host.threadStartCount, 1);
+    assert.equal(host.turnStartCount, 1);
+    assert.equal(fallbackPresentations, 0);
+    const persisted = await store.get(envelope().placement.payload.placementId);
+    assert.equal(persisted?.status, "pending");
+    assert.ok(persisted?.hostTurnId);
+    assert.equal(persisted?.receipt, undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("restart recovery persists an existing display turn before suppressing a fallback", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ad-daddy-delivery-"));
+  try {
+    const host = new RuntimeHost({
+      seedCompletedThread: true,
+      output: "This existing response is missing the required sponsored fields.",
+    });
+    let fallbackPresentations = 0;
+    const store = new JsonLocalDeliveryStateStore(join(directory, "deliveries.json"));
+    const source = envelope();
+    await store.put({
+      placementId: source.placement.payload.placementId,
+      receiverAccountId: source.receiverAccountId,
+      installationId: source.installationId,
+      signedPlacementSha256: createHash("sha256").update(canonicalJson(source.placement)).digest("hex"),
+      status: "pending",
+      hostSessionId: "sponsored-existing",
+      hostInstructionSourcesVerified: true,
+      hostInstructionSources: [],
+      updatedAt: NOW.toISOString(),
+    });
+    const delivery = new CodexLocalDeliveryRuntime({
+      store,
+      marketplacePublicKeyPem: TEST_MARKETPLACE_PUBLIC_KEY_PEM,
+      authorizeHost: async () => host.context(),
+      presentFallback: async () => { fallbackPresentations += 1; },
+    });
+
+    await assert.rejects(delivery.deliver(source, NOW), /fallback.*suppressed|may already be visible/i);
+    assert.equal(fallbackPresentations, 0);
+    assert.equal((await store.get(source.placement.payload.placementId))?.hostTurnId, "display-turn");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -142,6 +266,39 @@ function envelope(): ClearedPlacementEnvelope {
   };
 }
 
+function claimedEnvelope(privateKeyPem: string): ClaimedPlacementEnvelope {
+  const payload = structuredClone(SIGNED_PLACEMENT_FIXTURE.payload);
+  payload.issuedAt = new Date(NOW.getTime() - 1_000).toISOString();
+  payload.expiresAt = new Date(NOW.getTime() + 60_000).toISOString();
+  const placement = {
+    algorithm: "Ed25519" as const, keyId: "marketplace_test", payload,
+    signature: sign(null, Buffer.from(canonicalJson(payload)), privateKeyPem).toString("base64url"),
+  };
+  const creativeDigest = createHash("sha256").update(canonicalJson(placement)).digest("hex");
+  const unsigned = {
+    protocolVersion: 1 as const, claimId: "claim_local", receiverAccountId: "receiver_1", receiverProfileId: "profile_1",
+    installationId: "installation_1", deviceKeyThumbprint: "a".repeat(43), consentVersion: 1,
+    opportunityId: "opportunity_1", placementId: placement.payload.placementId, campaignId: "campaign_1", reservationId: "reservation_1",
+    rewardType: "stablecoin" as const, grossAmountMinor: 625, receiverAmountMinor: 500, operatorAmountMinor: 125,
+    currency: "USD" as const, creativeDigest, eligibleBidderCount: 2, issuedAt: NOW.toISOString(),
+    expiresAt: new Date(NOW.getTime() + 60_000).toISOString(),
+  };
+  const grantPayload = { ...unsigned, grantDigest: createHash("sha256").update(canonicalJson(unsigned)).digest("hex") };
+  return {
+    claimId: unsigned.claimId,
+    grant: {
+      algorithm: "Ed25519", keyId: "marketplace_test", payload: grantPayload,
+      signature: sign(null, Buffer.from(canonicalJson(grantPayload)), privateKeyPem).toString("base64url"),
+    },
+    lease: {
+      leaseId: "lease_local", claimId: unsigned.claimId, installationId: unsigned.installationId,
+      deviceKeyThumbprint: unsigned.deviceKeyThumbprint, creativeDigest, policyVersion: "pull/v1", state: "active",
+      issuedAt: NOW.toISOString(), expiresAt: new Date(NOW.getTime() + 15_000).toISOString(),
+    },
+    placement,
+  };
+}
+
 interface RuntimeThread {
   id: string;
   name: string | null;
@@ -152,11 +309,25 @@ interface RuntimeThread {
 class RuntimeHost {
   readonly #threads = new Map<string, RuntimeThread>();
   readonly #instructionSources: string[];
+  readonly #output: string;
   threadStartCount = 0;
   turnStartCount = 0;
 
-  constructor(options: { instructionSources?: string[] } = {}) {
+  constructor(options: { instructionSources?: string[]; output?: string; seedCompletedThread?: boolean } = {}) {
     this.#instructionSources = options.instructionSources ?? [];
+    this.#output = options.output ?? "Sponsored via Ad Daddy\nNeon — Add Postgres without leaving Codex\nReward: $5.00\nMatched: TypeScript, database integration";
+    if (options.seedCompletedThread) {
+      this.#threads.set("sponsored-existing", {
+        id: "sponsored-existing",
+        name: "Sponsored · Add Postgres without leaving Codex",
+        preview: this.#output,
+        turns: [{
+          id: "display-turn",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "answer", phase: "final_answer", text: this.#output }],
+        }],
+      });
+    }
   }
 
   context(): AuthorizedCodexHostContext {
@@ -210,7 +381,7 @@ class RuntimeHost {
               type: "agentMessage",
               id: "answer",
               phase: "final_answer",
-              text: "Sponsored via Ad Daddy\nNeon — Add Postgres without leaving Codex\nReward: $5.00\nMatched: TypeScript, database integration",
+              text: this.#output,
             };
             turn.items.push(item);
             emit({ method: "item/completed", params: { threadId: thread.id, turnId: turn.id, item } });

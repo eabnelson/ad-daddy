@@ -1,6 +1,8 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { deployedSponsorshipRuntime } from "../lib/marketplace/sponsorship-runtime.ts";
+import { drainExpiryBatches } from "../lib/marketplace/expiry-drain.ts";
 
 interface Env {
   AUCTION_SERVICE: Fetcher;
@@ -9,6 +11,10 @@ interface Env {
   AD_DADDY_ENV: "test" | "staging" | "production";
   AD_DADDY_MEMO_SALT: string;
   AD_DADDY_PAYMENT_EVENT_SECRET: string;
+  AD_DADDY_CAMPAIGN_TOKEN_SECRET: string;
+  AD_DADDY_LAUNCH_POLICY_JSON: string;
+  AD_DADDY_ACCOUNT_AGENT_TOKEN_SECRET: string;
+  AD_DADDY_OPERATOR_ACCOUNT_IDS: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -49,6 +55,12 @@ const worker = {
     }
 
     return handler.fetch(request, env, ctx);
+  },
+  async scheduled(_controller: unknown, _env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil((async () => {
+      const runtime = await deployedSponsorshipRuntime();
+      await drainExpiryBatches(runtime.service, new Date());
+    })());
   },
 };
 

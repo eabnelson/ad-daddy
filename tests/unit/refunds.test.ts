@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { CampaignBudgetService } from "../../lib/marketplace/budget.ts";
+import { D1CampaignBudgetService } from "../../lib/marketplace/d1-campaign.ts";
 import { InMemoryLedgerRepository, LedgerService } from "../../lib/payments/ledger.ts";
 import {
   InMemoryRefundApprovalRepository,
@@ -10,7 +11,8 @@ import {
   RefundService,
 } from "../../lib/payments/refunds.ts";
 import { SyntheticTempoClient, TEMPO_MODERATO_ALPHA_USD, TEMPO_MODERATO_CHAIN_ID } from "../../lib/payments/tempo-client.ts";
-import { InMemoryPaymentStateRepository } from "../../lib/payments/repository.ts";
+import { InMemoryPaymentStateRepository, type DurableRefundRecord, type PaymentStateRepository } from "../../lib/payments/repository.ts";
+import { createMigratedD1 } from "../helpers/sqlite-d1.ts";
 
 const NOW = new Date("2026-08-15T12:00:00.000Z");
 const ADDRESS = `0x${"3".repeat(40)}`;
@@ -177,6 +179,65 @@ test("pending and paid refunds reconcile once after a cold start", async () => {
   assert.equal((await first.send("refund_cold")).status, "paid");
   assert.equal(ledgerRepository.transactions.length, 1);
 });
+
+test("a D1 refund withdrawal recovers after refund-record persistence fails", async (t) => {
+  const migrated = createMigratedD1();
+  t.after(migrated.close);
+  await migrated.database.prepare("INSERT INTO human_accounts (id, status) VALUES ('advertiser_1', 'active')").run();
+  await migrated.database.prepare(`INSERT INTO advertiser_brands
+    (id, account_id, name, verified_domain, ownership_status, verified_at)
+    VALUES ('brand_refund', 'advertiser_1', 'Refund test', 'example.com', 'verified', ?)`)
+    .bind(NOW.toISOString()).run();
+  await migrated.database.prepare(`INSERT INTO campaigns
+    (id, account_id, brand_id, status, advertiser_terms_version, destination_url,
+     schedule_starts_at, schedule_ends_at, audience_json, offer_json, creative_json,
+     conversion_terms, maximum_spend_minor, maximum_bid_minor, daily_cap_minor,
+     funded_minor, spent_minor, refunded_minor, closed_at, created_at, updated_at)
+    VALUES ('campaign_1', 'advertiser_1', 'brand_refund', 'closed', 'advertiser-terms/1', 'https://example.com', ?, ?,
+      '{}', '{}', '{}', 'signup', 1000, 1000, 1000, 1000, 0, 0, ?, ?, ?)`)
+    .bind(NOW.toISOString(), plus(60_000), NOW.toISOString(), NOW.toISOString(), NOW.toISOString()).run();
+  const budgets = new D1CampaignBudgetService(migrated.database);
+  const approvalRepository = new InMemoryRefundApprovalRepository();
+  const proofs = new RefundHumanProofStore(approvalRepository);
+  const approvals = new RefundApprovalRegistry(proofs);
+  const approval = await approve(proofs, approvals, "proof_durable", "nonce_durable");
+  const state = new FailFirstRefundPutRepository();
+  const serviceInput = {
+    tempo: new SyntheticTempoClient(), ledger: new LedgerService(new InMemoryLedgerRepository()), policy,
+    tokenAddress: TEMPO_MODERATO_ALPHA_USD, memoSalt: "durable-refund-test-salt", budgets, approvals, repository: state,
+  };
+
+  await assert.rejects(new RefundService(serviceInput).prepare(refundInput("refund_durable", approval.approvalId)), /injected refund record outage/);
+  assert.equal((await budgets.snapshot("campaign_1")).refundedMinor, 1_000);
+  const recovered = await new RefundService(serviceInput).prepare({
+    ...refundInput("refund_durable", approval.approvalId),
+    now: new Date(NOW.getTime() + 31_000),
+  });
+  assert.equal(recovered.status, "pending");
+  assert.equal((await budgets.snapshot("campaign_1")).refundedMinor, 1_000);
+});
+
+class FailFirstRefundPutRepository implements PaymentStateRepository {
+  readonly #delegate = new InMemoryPaymentStateRepository();
+  #fail = true;
+  getDepositCommitment = this.#delegate.getDepositCommitment.bind(this.#delegate);
+  putDepositCommitment = this.#delegate.putDepositCommitment.bind(this.#delegate);
+  getDepositRecord = this.#delegate.getDepositRecord.bind(this.#delegate);
+  getDepositRecordByMemo = this.#delegate.getDepositRecordByMemo.bind(this.#delegate);
+  findCreditedCampaignDeposit = this.#delegate.findCreditedCampaignDeposit.bind(this.#delegate);
+  putDepositRecord = this.#delegate.putDepositRecord.bind(this.#delegate);
+  listPayoutDestinations = this.#delegate.listPayoutDestinations.bind(this.#delegate);
+  putPayoutDestination = this.#delegate.putPayoutDestination.bind(this.#delegate);
+  getPayout = this.#delegate.getPayout.bind(this.#delegate);
+  putPayout = this.#delegate.putPayout.bind(this.#delegate);
+  payoutTotalForPeriod = this.#delegate.payoutTotalForPeriod.bind(this.#delegate);
+  getRefund = this.#delegate.getRefund.bind(this.#delegate);
+  getRefundByCampaign = this.#delegate.getRefundByCampaign.bind(this.#delegate);
+  async putRefund(value: DurableRefundRecord) {
+    if (this.#fail) { this.#fail = false; throw new Error("injected refund record outage"); }
+    return this.#delegate.putRefund(value);
+  }
+}
 
 function setup(
   budgets: CampaignBudgetService,

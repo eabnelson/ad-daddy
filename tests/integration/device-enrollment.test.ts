@@ -8,6 +8,7 @@ import {
   MemoryDeviceEnrollmentRepository,
 } from "../../lib/auth/device-enrollment.ts";
 import { deviceKeyThumbprint } from "../../lib/auth/device-proof.ts";
+import { approvalResourceFingerprint, MemoryApprovalCapabilityRepository } from "../../lib/auth/approval-capability.ts";
 
 const NOW = new Date("2026-08-15T16:00:00.000Z");
 const APPROVAL = {
@@ -26,19 +27,25 @@ async function publicKey() {
 test("human-authenticated grant enrolls one durable ES256 key and cannot replay", async () => {
   const repository = new MemoryDeviceEnrollmentRepository();
   const service = new DurableDeviceEnrollmentService(repository, { randomBytes: () => new Uint8Array(32).fill(7) });
-  const grantHandler = createEnrollmentGrantHandler(service, () => NOW);
-  const enrollHandler = createEnrollmentHandler(service, () => NOW);
   const key = await publicKey();
+  const approvals = new MemoryApprovalCapabilityRepository();
+  await approvals.putVerified({
+    approvalId: "approval_device_1", accountId: "account_1", purpose: "device_enroll",
+    resourceFingerprint: approvalResourceFingerprint({ installationId: "install_1", keyThumbprint: key.thumbprint }),
+    approvedAt: APPROVAL.approvedAt, expiresAt: APPROVAL.expiresAt,
+  });
+  const grantHandler = createEnrollmentGrantHandler(service, () => NOW, approvals);
+  const enrollHandler = createEnrollmentHandler(service, () => NOW);
 
   const unauthenticated = await grantHandler(new Request("https://ad.daddy/api/v1/installations/enrollment-grants", {
-    method: "POST", body: JSON.stringify({ installationId: "install_1", keyThumbprint: key.thumbprint, approval: APPROVAL }),
+    method: "POST", body: JSON.stringify({ installationId: "install_1", keyThumbprint: key.thumbprint, approvalId: "approval_device_1" }),
   }));
   assert.equal(unauthenticated.status, 401);
 
   const grantResponse = await grantHandler(new Request("https://ad.daddy/api/v1/installations/enrollment-grants", {
     method: "POST",
     headers: { "content-type": "application/json", "oai-authenticated-user-id": "account_1" },
-    body: JSON.stringify({ installationId: "install_1", keyThumbprint: key.thumbprint, approval: APPROVAL }),
+    body: JSON.stringify({ installationId: "install_1", keyThumbprint: key.thumbprint, approvalId: "approval_device_1" }),
   }));
   assert.equal(grantResponse.status, 201);
   const grant = await grantResponse.json() as { grantToken: string; expiresAt: string };
@@ -68,6 +75,20 @@ test("human-authenticated grant enrolls one durable ES256 key and cannot replay"
   }));
   assert.equal(replay.status, 409);
   assert.match((await replay.json() as { message: string }).message, /consumed|enrolled/i);
+});
+
+test("caller-authored device approval data cannot mint an enrollment grant", async () => {
+  const service = new DurableDeviceEnrollmentService(new MemoryDeviceEnrollmentRepository());
+  const approvals = new MemoryApprovalCapabilityRepository();
+  const key = await publicKey();
+  const handler = createEnrollmentGrantHandler(service, () => NOW, approvals);
+  const response = await handler(new Request("https://ad.daddy/api/v1/installations/enrollment-grants", {
+    method: "POST",
+    headers: { "content-type": "application/json", "oai-authenticated-user-id": "account_1" },
+    body: JSON.stringify({ installationId: "install_1", keyThumbprint: key.thumbprint, approval: APPROVAL, approvalId: "forged" }),
+  }));
+  assert.equal(response.status, 409);
+  assert.match((await response.json() as { message: string }).message, /server-issued/i);
 });
 
 test("expiry, installation scope, and public-key thumbprint mismatches fail closed", async () => {

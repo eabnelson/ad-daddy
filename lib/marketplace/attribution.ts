@@ -74,11 +74,19 @@ export class AttributionService {
   readonly #budgets: ConversionBudgetGateway;
   readonly #ledger: LedgerService;
   readonly #verifier: ConversionEvidenceVerifier;
-  constructor(budgets: ConversionBudgetGateway, ledger: LedgerService, verifier: ConversionEvidenceVerifier) {
+  readonly #durableAuthorityRequired: boolean;
+  constructor(
+    budgets: ConversionBudgetGateway,
+    ledger: LedgerService,
+    verifier: ConversionEvidenceVerifier,
+    options: { durableAuthorityRequired?: boolean } = {},
+  ) {
     this.#budgets = budgets; this.#ledger = ledger; this.#verifier = verifier;
+    this.#durableAuthorityRequired = options.durableAuthorityRequired ?? false;
   }
 
   async open(input: ConversionTerms): Promise<ConversionRecord> {
+    this.assertAvailable();
     assertTerms(input);
     const existing = this.#records.get(input.placementId);
     if (existing) {
@@ -99,6 +107,7 @@ export class AttributionService {
   }
 
   submit(input: SignedConversionEvidence, now = new Date()): ConversionRecord {
+    this.assertAvailable();
     this.#verifier.verify(input);
     const terms = this.#terms.get(input.placementId);
     const record = this.#records.get(input.placementId);
@@ -122,6 +131,7 @@ export class AttributionService {
   }
 
   async settle(placementId: string, now = new Date()): Promise<ConversionRecord> {
+    this.assertAvailable();
     const terms = this.#terms.get(placementId);
     const record = this.#records.get(placementId);
     if (!terms || !record) throw new Error("Unknown conversion hold");
@@ -146,6 +156,7 @@ export class AttributionService {
   }
 
   async reject(placementId: string, reason: string): Promise<ConversionRecord> {
+    this.assertAvailable();
     const terms = this.#terms.get(placementId);
     const record = this.#records.get(placementId);
     if (!terms || !record || record.status === "paid") throw new Error("Conversion cannot be rejected");
@@ -153,6 +164,12 @@ export class AttributionService {
     const rejected: ConversionRecord = Object.freeze({ ...record, status: "rejected", reason: reason.slice(0, 240) });
     this.#records.set(placementId, rejected);
     return rejected;
+  }
+
+  private assertAvailable(): void {
+    if (this.#durableAuthorityRequired) {
+      throw new Error("Production conversions require a durable conversion authority");
+    }
   }
 }
 

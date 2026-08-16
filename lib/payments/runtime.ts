@@ -1,5 +1,5 @@
 import { FixedWindowRateLimiter } from "../http/rate-limit.ts";
-import { campaignRuntime } from "../marketplace/campaign-registry.ts";
+import { D1CampaignBudgetService } from "../marketplace/d1-campaign.ts";
 import { AttributionService, ConversionEvidenceVerifier } from "../marketplace/attribution.ts";
 import { getPaymentCore, type PaymentBindings } from "./deposit-runtime.ts";
 import { PayoutDestinationRegistry, PayoutService } from "./payouts.ts";
@@ -23,6 +23,7 @@ function assemble(core: Awaited<ReturnType<typeof getPaymentCore>>): PaymentRunt
   const conversionVerifier = new ConversionEvidenceVerifier();
   const refundProofs = new RefundHumanProofStore(core.refundApprovalRepository);
   const refundApprovals = new RefundApprovalRegistry(refundProofs);
+  const budgets = new D1CampaignBudgetService(core.db);
   return Object.freeze({
     policy: core.policy,
     memoSalt: core.memoSalt,
@@ -41,10 +42,12 @@ function assemble(core: Awaited<ReturnType<typeof getPaymentCore>>): PaymentRunt
     refundApprovals,
     refunds: new RefundService({
       tempo, ledger: core.ledger, policy: core.policy, tokenAddress: TEMPO_MODERATO_ALPHA_USD,
-      memoSalt: core.memoSalt, budgets: campaignRuntime.budgets, approvals: refundApprovals, repository: core.stateRepository,
+      memoSalt: core.memoSalt, budgets, approvals: refundApprovals, repository: core.stateRepository,
     }),
     conversionVerifier,
-    attribution: new AttributionService(campaignRuntime.budgets, core.ledger, conversionVerifier),
+    attribution: new AttributionService(budgets, core.ledger, conversionVerifier, {
+      durableAuthorityRequired: core.policy.environment === "production",
+    }),
     rateLimit: new FixedWindowRateLimiter({ limit: 30, windowMs: 60_000, maxRetryAfterSeconds: 60 }),
   });
 }

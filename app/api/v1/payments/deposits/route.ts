@@ -1,16 +1,17 @@
 import { PAYMENT_REQUEST_LIMITS, parseBoundedJson, RequestLimitError } from "../../../../../lib/http/request-limits.ts";
 import { opaqueTempoMemo, type TempoTransferEvent } from "../../../../../lib/payments/tempo-client.ts";
 import { getPaymentRuntime, type PaymentRuntime } from "../../../../../lib/payments/runtime.ts";
-import { campaignRuntime, type CampaignRuntime } from "../../../../../lib/marketplace/campaign-registry.ts";
+import { getCampaignRuntime, type CampaignRuntime } from "../../../../../lib/marketplace/campaign-registry.ts";
 import type { PaymentEventEnvelope } from "../../../../../lib/auth/operator-event-envelope.ts";
 
 type DepositBody =
   | { action: "prepare"; campaignId: string; amountMinor: number; expectedSender?: string }
   | { action: "observe_finalized_event"; envelope: PaymentEventEnvelope };
 
-export function createDepositHandler(injectedRuntime?: PaymentRuntime, campaigns: CampaignRuntime = campaignRuntime) {
+export function createDepositHandler(injectedRuntime?: PaymentRuntime, campaigns?: CampaignRuntime) {
   return async function handle(request: Request): Promise<Response> {
     const runtime = injectedRuntime ?? await getPaymentRuntime();
+    const campaignState = campaigns ?? await getCampaignRuntime();
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
     const ipLimit = runtime.rateLimit.check([`deposit-ip:${ip}`]);
     if (!ipLimit.allowed) return rateLimited(ipLimit.retryAfterSeconds);
@@ -24,7 +25,7 @@ export function createDepositHandler(injectedRuntime?: PaymentRuntime, campaigns
         const actorLimit = runtime.rateLimit.check([`deposit-actor:${accountId}`, `deposit-campaign:${body.campaignId}`]);
         if (!actorLimit.allowed) return rateLimited(actorLimit.retryAfterSeconds);
         if (!Number.isSafeInteger(body.amountMinor) || body.amountMinor < 1) return json(400, { error: "invalid_deposit_amount" });
-        const campaign = await campaigns.campaigns.get(body.campaignId);
+        const campaign = await campaignState.campaigns.get(body.campaignId);
         if (campaign.accountId !== accountId) return json(404, { error: "campaign_not_found" });
         if (campaign.maximumSpendMinor !== body.amountMinor) return json(400, { error: "deposit_must_match_campaign_maximum" });
         const memo = opaqueTempoMemo("deposit", `${accountId}:${body.campaignId}:${body.amountMinor}`, runtime.memoSalt);

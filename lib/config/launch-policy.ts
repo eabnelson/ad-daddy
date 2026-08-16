@@ -121,6 +121,20 @@ export class LaunchPolicyError extends Error {
   }
 }
 
+/**
+ * Production stablecoin settlement is intentionally unavailable until both
+ * controls have a durable implementation. This is an implementation
+ * capability gate, independent of any platform sponsorship approval.
+ */
+export function assertProductionCashSettlementCapability(environment: Environment): void {
+  if (!ENVIRONMENTS.includes(environment)) throw new LaunchPolicyError("environment", "is unsupported");
+  if (environment !== "production") return;
+  throw new LaunchPolicyError(
+    "productionCashSettlement",
+    "is disabled until host-integrity receipts and durable reward-velocity controls are implemented and verified",
+  );
+}
+
 function isRecord(input: unknown): input is Record<string, unknown> {
   return Boolean(input && typeof input === "object" && !Array.isArray(input));
 }
@@ -186,4 +200,9 @@ export function validateLaunchPolicy(input: unknown): {
   }
 
   return Object.freeze({ allowed: true, environment: environment as Environment, version });
+}
+
+export function parseLaunchPolicy(input: unknown): ProductionLaunchPolicy {
+  validateLaunchPolicy(input);
+  return Object.freeze(structuredClone(input as ProductionLaunchPolicy));
 }

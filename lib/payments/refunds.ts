@@ -90,14 +90,14 @@ export class InMemoryRefundApprovalRepository implements RefundApprovalRepositor
   ): Promise<RefundApprovalRecord> {
     return this.#serial.run(`approval:${approvalId}`, () => {
       const record = this.#approvals.get(approvalId);
-      if (!record || record.accountId !== input.accountId || record.campaignId !== input.campaignId ||
-        Date.parse(record.expiresAt) <= now.getTime()) {
+      if (!record || record.accountId !== input.accountId || record.campaignId !== input.campaignId) {
         throw new Error("Fresh server-issued refund approval is required");
       }
       if (record.consumedByRefundId) {
         if (record.consumedByRefundId !== input.refundId) throw new Error("Refund approval replay");
         return record;
       }
+      if (Date.parse(record.expiresAt) <= now.getTime()) throw new Error("Fresh server-issued refund approval is required");
       const consumed = Object.freeze({ ...record, consumedByRefundId: input.refundId, consumedAt: now.toISOString() });
       this.#approvals.set(approvalId, consumed);
       return consumed;
@@ -161,7 +161,7 @@ export class RefundApprovalRegistry {
 }
 
 export interface RefundBudgetGateway {
-  snapshot(campaignId: string): CampaignBudgetSnapshot;
+  snapshot(campaignId: string): CampaignBudgetSnapshot | Promise<CampaignBudgetSnapshot>;
   withdraw(campaignId: string, refundId: string, amountMinor: number): Promise<CampaignBudgetSnapshot>;
 }
 
@@ -246,7 +246,7 @@ export class RefundService {
         campaignId: input.campaignId,
         refundId: input.refundId,
       }, now);
-      const budget = this.#budgets.snapshot(input.campaignId);
+      const budget = await this.#budgets.snapshot(input.campaignId);
       if (budget.status !== "closed") throw new Error("Campaign must be closed before refund");
       await this.#budgets.withdraw(input.campaignId, input.refundId, approval.amountMinor);
       const record: RefundRecord = Object.freeze({

@@ -78,13 +78,15 @@ private func createOrLoad(label: String) throws -> SecKey {
     let tag = Data(label.utf8)
     let query: [CFString: Any] = [
         kSecClass: kSecClassKey,
+        kSecAttrKeyClass: kSecAttrKeyClassPrivate,
         kSecAttrApplicationTag: tag,
         kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
+        kSecAttrTokenID: kSecAttrTokenIDSecureEnclave,
         kSecReturnRef: true,
     ]
     var existing: CFTypeRef?
     let existingStatus = SecItemCopyMatching(query as CFDictionary, &existing)
-    if existingStatus == errSecSuccess, let key = existing as! SecKey? { return key }
+    if existingStatus == errSecSuccess, let key = existing as! SecKey? { return try requireSecureEnclavePrivateKey(key) }
     guard existingStatus == errSecItemNotFound else { throw HelperError.security("Keychain lookup", existingStatus) }
 
     var accessError: Unmanaged<CFError>?
@@ -112,7 +114,7 @@ private func createOrLoad(label: String) throws -> SecKey {
     guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &creationError) else {
         throw creationError?.takeRetainedValue() ?? HelperError.invalid("Could not create a non-exportable Secure Enclave key")
     }
-    return key
+    return try requireSecureEnclavePrivateKey(key)
 }
 
 private func persistentReference(for key: SecKey) throws -> Data {
@@ -138,6 +140,19 @@ private func loadPrivateKey(reference: Data) throws -> SecKey {
     let status = SecItemCopyMatching(query as CFDictionary, &result)
     guard status == errSecSuccess, let key = result as! SecKey? else {
         throw HelperError.security("Device key lookup", status)
+    }
+    return try requireSecureEnclavePrivateKey(key)
+}
+
+private func requireSecureEnclavePrivateKey(_ key: SecKey) throws -> SecKey {
+    guard let attributes = SecKeyCopyAttributes(key) as? [CFString: Any],
+          attributes[kSecAttrKeyClass] as? String == kSecAttrKeyClassPrivate as String,
+          attributes[kSecAttrKeyType] as? String == kSecAttrKeyTypeECSECPrimeRandom as String,
+          attributes[kSecAttrTokenID] as? String == kSecAttrTokenIDSecureEnclave as String,
+          attributes[kSecAttrKeySizeInBits] as? Int == 256,
+          attributes[kSecAttrCanSign] as? Bool == true,
+          attributes[kSecAttrIsExtractable] as? Bool == false else {
+        throw HelperError.invalid("The stored credential is not a non-exportable Secure Enclave P-256 signing key")
     }
     return key
 }

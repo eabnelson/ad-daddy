@@ -5,5 +5,7 @@ export * from "./codex.js";
 export * from "./claude.js";
 export * from "./contract.js";
 export * from "./display-instruction.js";
+export * from "./device-proof-contract.js";
 export * from "./generic.js";
 export * from "./local-delivery-runtime.js";
+export * from "./sponsorship-contract.js";

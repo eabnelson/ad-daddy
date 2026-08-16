@@ -1,4 +1,5 @@
 import { KeyedSerialExecutor } from "../runtime/keyed-serial.ts";
+import { BudgetUnavailableError } from "./budget-error.ts";
 
 export type CampaignBudgetStatus = "active" | "paused" | "closed";
 
@@ -70,14 +71,14 @@ export class CampaignBudgetService {
         if (existing.status === "released") throw new Error("Reservation was released");
         return Object.freeze({ ...existing });
       }
-      if (record.status !== "active") throw new Error(`Campaign is ${record.status}`);
+      if (record.status !== "active") throw new BudgetUnavailableError(`Campaign is ${record.status}`);
       assertAmount(amountMinor, "amountMinor");
-      if (record.spentMinor + record.reservedMinor + record.heldMinor + amountMinor > record.fundedMinor) throw new Error("Insufficient funded campaign balance");
+      if (record.spentMinor + record.reservedMinor + record.heldMinor + amountMinor > record.fundedMinor) throw new BudgetUnavailableError("Insufficient funded campaign balance");
       const day = now.toISOString().slice(0, 10);
       const dailyUsed = [...record.reservations.values()]
         .filter((item) => item.day === day && item.status !== "released")
         .reduce((total, item) => total + item.amountMinor, 0);
-      if (dailyUsed + amountMinor > record.dailyCapMinor) throw new Error("Campaign daily cap exceeded");
+      if (dailyUsed + amountMinor > record.dailyCapMinor) throw new BudgetUnavailableError("Campaign daily cap exceeded");
       const reservation: BudgetReservation = { reservationId, amountMinor, day, status: "reserved" };
       record.reservations.set(reservationId, reservation);
       record.reservedMinor += amountMinor;

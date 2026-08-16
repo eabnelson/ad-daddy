@@ -17,7 +17,7 @@ test("installed ad-daddy bin dispatches every documented command as machine-read
   const server = createServer(async (request, response) => {
     let raw = "";
     for await (const chunk of request) raw += chunk;
-    const body = JSON.parse(raw) as Record<string, unknown>;
+    const body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
     requests.push({ path: request.url ?? "", body });
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(request.url === "/poll" ? { status: "no_placement" } : request.url === "/api/v1/opportunities" ? { items: [], nextCursor: null } : { campaign: body.campaign ?? { campaignId: body.campaignId, status: body.action } }));
@@ -64,11 +64,22 @@ test("installed ad-daddy bin dispatches every documented command as machine-read
     maximumSpendMinor: 1000, maximumBidMinor: 100, dailyCapMinor: 500, guaranteedPlacementMinor: 50, conversionBonusMinor: 0, conversionTerms: "Signup", perUserFrequencyLimit: 1,
   };
   await command(["campaign", "prepare", "--json", JSON.stringify(campaign)], env);
-  const approvalInput = JSON.stringify({ campaignId: "campaign_cli", approval: { approvedCampaignId: "campaign_cli" } });
+  const approvalInput = JSON.stringify({ campaignId: "campaign_cli", approvalId: "approval_cli" });
   for (const operation of ["fund", "approve", "pause", "close"]) await command(["campaign", operation, "--json", approvalInput], env);
+  await command(["campaign", "token", "--json", JSON.stringify({
+    campaignId: "campaign_cli", token: { scopes: ["opportunity:search", "bid:submit"], spendCeilingMinor: 500, bidCeilingMinor: 100, expiresAt: "2026-08-15T15:10:00.000Z" },
+  })], { ...env, AD_DADDY_API_TOKEN: "account-agent-token" });
   await command(["search", "--json", JSON.stringify({ accountId: "account_cli", campaignId: "campaign_cli" })], env);
-  assert.deepEqual(requests.filter((item) => item.path === "/api/v1/campaigns").map((item) => item.body.action), ["prepare", "fund", "activate", "pause", "close"]);
-  assert.equal(requests.at(-1)?.path, "/api/v1/opportunities");
+  await command(["bid", "--json", JSON.stringify({
+    auctionId: "auction_cli", accountId: "account_cli", campaignId: "campaign_cli",
+    bid: { bidId: "bid_cli", campaignId: "campaign_cli", rewardLane: "credits", grossMinor: 0, submittedAt: "2026-08-15T15:00:00.000Z" },
+  })], { ...env, AD_DADDY_API_TOKEN: "campaign-agent-token" });
+  await command(["placement", "--placement", "placement_cli"], { ...env, AD_DADDY_API_TOKEN: "account-agent-token" });
+  await command(["placement", "--placement", "placement_cli", "--action", "report", "--confirm"], { ...env, AD_DADDY_API_TOKEN: "account-agent-token" });
+  assert.deepEqual(requests.filter((item) => item.path === "/api/v1/campaigns").map((item) => item.body.action), ["prepare", "fund", "activate", "pause", "close", "issue_agent_token"]);
+  assert.ok(requests.some((item) => item.path === "/api/v1/opportunities"));
+  assert.ok(requests.some((item) => item.path === "/api/v1/auctions/auction_cli/bids"));
+  assert.equal(requests.filter((item) => item.path === "/api/v1/placements/placement_cli/receipt").length, 2);
 
   assert.equal((await command(["pause"], env)).result.status, "paused");
   assert.equal((await command(["uninstall"], env)).result.status, "revoked");

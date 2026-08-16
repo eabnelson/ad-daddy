@@ -15,6 +15,7 @@ export class LedgerInvariantError extends Error {
 export interface LedgerRepository {
   commit(transaction: LedgerTransaction): Promise<LedgerTransaction>;
   list(): Promise<readonly LedgerTransaction[]>;
+  listForAccounts?(accountIds: readonly string[], input: { limit: number; cursor?: string }): Promise<{ transactions: readonly LedgerTransaction[]; nextCursor: string | null }>;
 }
 
 function canonicalJson(value: unknown): string {
@@ -114,6 +115,19 @@ export class InMemoryLedgerRepository implements LedgerRepository {
   async list(): Promise<readonly LedgerTransaction[]> {
     return structuredClone(this.transactions);
   }
+
+  async listForAccounts(accountIds: readonly string[], input: { limit: number; cursor?: string }) {
+    const owned = new Set(accountIds);
+    const ordered = this.transactions.filter((transaction) => transaction.entries.some((entry) => owned.has(entry.accountId)))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.transactionId.localeCompare(left.transactionId));
+    const start = input.cursor ? ordered.findIndex((item) => ledgerCursor(item) === input.cursor) + 1 : 0;
+    const page = ordered.slice(Math.max(start, 0), Math.max(start, 0) + input.limit);
+    return { transactions: structuredClone(page), nextCursor: page.length === input.limit ? ledgerCursor(page.at(-1)!) : null };
+  }
+}
+
+function ledgerCursor(transaction: LedgerTransaction): string {
+  return Buffer.from(`${transaction.createdAt}\0${transaction.transactionId}`).toString("base64url");
 }
 
 export class LedgerService {

@@ -36,13 +36,13 @@ test("revoked, expired, and tampered tokens fail closed", async () => {
   }, now);
   await assert.rejects(tokens.verify(`${token}x`, { accountId: "acct_1", campaignId: "campaign_1", scope: "campaign:read" }, now), /invalid/i);
   await assert.rejects(tokens.verify(token, { accountId: "acct_1", campaignId: "campaign_1", scope: "campaign:read" }, new Date("2026-08-15T16:02:00.000Z")), /expired/i);
-  tokens.revoke("token_2");
+  await tokens.revoke("token_2");
   await assert.rejects(tokens.verify(token, { accountId: "acct_1", campaignId: "campaign_1", scope: "campaign:read" }, now), /revoked/i);
 });
 
 test("spend authorization accepts only contexts produced by the token service", async () => {
   const tokens = new CampaignTokenService("test-secret-with-at-least-32-characters");
-  assert.throws(() => tokens.authorizeVerifiedSpend({ claims: {} } as never, {
+  await assert.rejects(tokens.authorizeVerifiedSpend({ claims: {} } as never, {
     accountId: "acct_1", campaignId: "campaign_1", amountMinor: 1, bidMinor: 1, idempotencyKey: "forged",
   }, now), /context is invalid/i);
 });
@@ -57,19 +57,19 @@ test("unforwarded bid reservations release token spend while accepted bids remai
   const authorization = await tokens.authorize(token, {
     accountId: "acct_1", campaignId: "campaign_1", scope: "bid:submit", requestedBidMinor: 500,
   }, now);
-  const failed = tokens.authorizeVerifiedSpend(authorization, {
+  const failed = await tokens.authorizeVerifiedSpend(authorization, {
     accountId: "acct_1", campaignId: "campaign_1", amountMinor: 500, bidMinor: 500, idempotencyKey: "failed",
   }, now);
   assert.equal(failed.newlyAuthorized, true);
-  tokens.releaseVerifiedSpend(authorization, "failed");
+  await tokens.releaseVerifiedSpend(authorization, "failed");
 
-  const accepted = tokens.authorizeVerifiedSpend(authorization, {
+  const accepted = await tokens.authorizeVerifiedSpend(authorization, {
     accountId: "acct_1", campaignId: "campaign_1", amountMinor: 500, bidMinor: 500, idempotencyKey: "accepted",
   }, now);
-  tokens.commitVerifiedSpend(authorization, "accepted");
-  tokens.releaseVerifiedSpend(authorization, "accepted");
+  await tokens.commitVerifiedSpend(authorization, "accepted");
+  await tokens.releaseVerifiedSpend(authorization, "accepted");
   assert.equal(accepted.remainingMinor, 0);
-  assert.throws(() => tokens.authorizeVerifiedSpend(authorization, {
+  await assert.rejects(tokens.authorizeVerifiedSpend(authorization, {
     accountId: "acct_1", campaignId: "campaign_1", amountMinor: 1, bidMinor: 1, idempotencyKey: "after_commit",
   }, now), /spend ceiling/i);
 });

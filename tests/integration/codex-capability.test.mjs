@@ -181,6 +181,26 @@ test("a valid placement creates one isolated display turn and returns a receipt"
   assert.equal(host.threadStartCalls[0].config.web_search, "disabled");
 });
 
+test("production native delivery never sends advertiser content without host proof that built-ins are disabled", async () => {
+  const unproven = new FakeAppServerHost();
+  const rejected = await deliverCodexPlacement({
+    ...deliveryOptions(unproven),
+    deploymentEnvironment: "production",
+  });
+  assert.equal(rejected.delivered, false);
+  assert.equal(rejected.code, "BUILT_IN_TOOLS_UNVERIFIED");
+  assert.equal(unproven.threadStartCalls.length, 0);
+  assert.equal(unproven.turnStartCalls.length, 0);
+
+  const proven = new FakeAppServerHost({ builtInToolsDisabled: true });
+  const delivered = await deliverCodexPlacement({
+    ...deliveryOptions(proven),
+    deploymentEnvironment: "production",
+  });
+  assert.equal(delivered.delivered, true);
+  assert.equal(proven.turnStartCalls.length, 1);
+});
+
 test("invalid and expired placements create no host state", async () => {
   const tampered = structuredClone(SIGNED_PLACEMENT_FIXTURE);
   tampered.payload.title = "tampered";
@@ -457,6 +477,7 @@ class FakeAppServerHost {
     return {
       cliVersion: "0.146.1",
       userAgent: "Codex Desktop/0.146.1 (test)",
+      builtInToolsDisabled: this.#options.builtInToolsDisabled === true,
       request: async (method, params) => {
         if (method === "thread/list") {
           return {

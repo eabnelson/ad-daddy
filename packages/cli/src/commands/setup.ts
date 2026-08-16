@@ -42,7 +42,12 @@ export class ReceiverSetupService {
     const existing = await this.#store.get(input.installationId);
     if (existing && existing.accountId !== input.accountId) throw new Error("Installation belongs to another account");
     const publishedFields = buildPublishedProfile(input.profile);
-    const consentVersion = (existing?.consentVersion ?? 0) + 1;
+    // A draft is an editable preview of the next consent version, not a
+    // consent event of its own. Re-preparing it must not create gaps in the
+    // durable, append-only consent chain.
+    const consentVersion = existing?.status === "draft"
+      ? existing.consentVersion
+      : (existing?.consentVersion ?? 0) + 1;
     let payoutAddress = existing?.payoutAddress;
     if (input.verifiedPayout) {
       assertPayoutApproval(input.verifiedPayout.approval, input.accountId, input.verifiedPayout.address, new Date());
@@ -84,8 +89,9 @@ export class ReceiverSetupService {
   async pause(installationId: string) {
     const config = await this.require(installationId);
     const revokedVersion = config.consentVersion;
+    const wasDraft = config.status === "draft";
     config.status = "paused";
-    config.consentVersion += 1;
+    if (!wasDraft) config.consentVersion += 1;
     await this.#store.put(config);
     await this.#dependencies.stopScheduler?.(installationId);
     await this.#dependencies.revokeConsent?.(installationId, revokedVersion);
@@ -93,10 +99,15 @@ export class ReceiverSetupService {
   }
 
   async revoke(installationId: string) {
-    const paused = await this.pause(installationId);
-    paused.status = "revoked";
-    await this.#store.put(paused);
-    return paused;
+    const config = await this.require(installationId);
+    const revokedVersion = config.consentVersion;
+    const wasDraft = config.status === "draft";
+    config.status = "revoked";
+    if (!wasDraft) config.consentVersion += 1;
+    await this.#store.put(config);
+    await this.#dependencies.stopScheduler?.(installationId);
+    await this.#dependencies.revokeConsent?.(installationId, revokedVersion);
+    return config;
   }
 
   async attachDeviceCredential(installationId: string, credential: DeviceCredential) {

@@ -6,7 +6,6 @@ import {
   type SponsorshipClaimRecord,
   type SponsorshipClaimRepository,
   type SponsorshipDeliveryLease,
-  type ExpiredUnclaimedReservation,
   type SponsorshipOpportunity,
   type SponsorshipOutcome,
   type SponsorshipReceiver,
@@ -26,11 +25,15 @@ import {
 } from "../auth/device-proof.ts";
 import type { SponsorshipDeviceIdentity } from "./sponsorship-claims.ts";
 import type { Environment, RewardType } from "../domain/types.ts";
+import { FixedWindowRateLimiter } from "../http/rate-limit.ts";
+import { assertProductionCashSettlementCapability, parseLaunchPolicy } from "../config/launch-policy.ts";
 
 type Row = Record<string, unknown>;
 const OPPORTUNITY_BUCKET_MS = 60_000;
 const OPPORTUNITY_TTL_MS = 5 * 60_000;
 const AUCTION_WINDOW_MS = 15_000;
+
+export const sponsorshipRequestRateLimit = new FixedWindowRateLimiter({ limit: 120, windowMs: 60_000, maxRetryAfterSeconds: 60 });
 
 export interface SponsorshipRuntime {
   service: SponsorshipClaimService;
@@ -42,7 +45,7 @@ export interface SponsorshipRuntime {
 export async function authenticateSponsorshipRequest(
   request: Request,
   rawBody: string,
-  runtime: SponsorshipRuntime,
+  runtime: Pick<SponsorshipRuntime, "proofs" | "environment" | "clock">,
 ): Promise<SponsorshipDeviceIdentity> {
   const encoded = request.headers.get("x-ad-daddy-device-proof");
   if (!encoded || encoded.length > 16_384) throw new Error("Bounded device proof header required");
@@ -114,8 +117,8 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
       ORDER BY published_at DESC LIMIT 1`).bind(receiver.receiverProfileId, receiver.consentVersion, proposedOpenedAt).first<{ fieldsJson: string }>();
     if (!profile) throw new Error("Active published receiver profile required");
     const fields = safeRecord(JSON.parse(profile.fieldsJson));
-    const minimumTakeHomeMinor = safeInteger(fields.minimumTakeHomeMinor, 0);
     const rewardLane = rewardType(fields.acceptedRewardTypes);
+    const minimumTakeHomeMinor = rewardLane === "stablecoin" ? safeInteger(fields.minimumTakeHomeMinor, 0) : 0;
     const matchedSignals = signalNames(fields);
     const active = await this.#db.prepare(`SELECT id FROM opportunities
       WHERE receiver_profile_id = ? AND installation_id = ? AND consent_version = ?
@@ -123,31 +126,33 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
       ORDER BY opened_at DESC LIMIT 1`)
       .bind(receiver.receiverProfileId, receiver.installationId, receiver.consentVersion, proposedOpenedAt).first<{ id: string }>();
     const bucket = Math.floor(now.getTime() / OPPORTUNITY_BUCKET_MS);
-    const opportunityId = active?.id ?? `pull:${receiver.installationId}:${receiver.consentVersion}:${bucket}`;
-    const auctionId = `auction:${opportunityId}`;
+    const rotatingOpportunityId = await privateCoalescingKey(receiver.installationId, receiver.consentVersion, bucket);
+    const opportunityId = active?.id ?? `opp_${crypto.randomUUID()}`;
     if (!active) {
       await this.#db.prepare(`INSERT INTO opportunities
         (id, rotating_opportunity_id, receiver_profile_id, installation_id, consent_version, state, opened_at, expires_at)
         VALUES (?, ?, ?, ?, ?, 'bidding', ?, ?) ON CONFLICT(rotating_opportunity_id) DO NOTHING`)
-        .bind(opportunityId, opportunityId, receiver.receiverProfileId, receiver.installationId, receiver.consentVersion, proposedOpenedAt, proposedExpiresAt).run();
+        .bind(opportunityId, rotatingOpportunityId, receiver.receiverProfileId, receiver.installationId, receiver.consentVersion, proposedOpenedAt, proposedExpiresAt).run();
     }
     const persisted = await this.#db.prepare(`SELECT id, receiver_profile_id AS receiverProfileId, installation_id AS installationId,
-      consent_version AS consentVersion, opened_at AS openedAt, expires_at AS expiresAt FROM opportunities WHERE rotating_opportunity_id = ?`)
-      .bind(opportunityId).first<Row>();
-    if (!persisted || text(persisted.id) !== opportunityId || text(persisted.receiverProfileId) !== receiver.receiverProfileId ||
+      consent_version AS consentVersion, opened_at AS openedAt, expires_at AS expiresAt FROM opportunities
+      WHERE id = ? OR rotating_opportunity_id = ?`)
+      .bind(opportunityId, rotatingOpportunityId).first<Row>();
+    if (!persisted || text(persisted.receiverProfileId) !== receiver.receiverProfileId ||
       text(persisted.installationId) !== receiver.installationId || integer(persisted.consentVersion) !== receiver.consentVersion) {
       throw new Error("Sponsorship opportunity coalescing collision");
     }
+    const persistedOpportunityId = text(persisted.id);
     const openedAt = text(persisted.openedAt);
     const expiresAt = text(persisted.expiresAt);
     const definition: AuctionDefinition = {
-      auctionId, opportunityId, rewardLane, consentVersion: receiver.consentVersion,
+      auctionId: `auction:${persistedOpportunityId}`, opportunityId: persistedOpportunityId, rewardLane, consentVersion: receiver.consentVersion,
       minimumTakeHomeMinor, matchedSignalNames: matchedSignals,
       closesAt: new Date(Math.min(Date.parse(expiresAt), Date.parse(openedAt) + AUCTION_WINDOW_MS)).toISOString(),
     };
     const response = await this.#auctionGateway.open(definition);
     if (!response.ok) throw new Error(`Auction open failed (${response.status})`);
-    return { opportunityId, auctionId, receiverProfileId: receiver.receiverProfileId, installationId: receiver.installationId,
+    return { opportunityId: persistedOpportunityId, auctionId: `auction:${persistedOpportunityId}`, receiverProfileId: receiver.receiverProfileId, installationId: receiver.installationId,
       consentVersion: receiver.consentVersion, openedAt, expiresAt };
   }
 
@@ -168,7 +173,11 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
     const auctionId = text(row.auctionId);
     if (row.winnerBidId === null && row.noFillReason === null) return { status: "pending", opportunityId, auctionId };
     if (row.winnerBidId === null) return { status: "no_fill", opportunityId, auctionId, reason: text(row.noFillReason) };
-    if (!row.reservationId || row.reservationStatus !== "reserved" || row.campaignStatus !== "active" || row.reservationAmountMinor !== row.grossAmountMinor) {
+    const winnerRewardType = text(row.rewardType) as RewardType;
+    const cashWinnerAvailable = winnerRewardType === "stablecoin" && row.reservationId && row.reservationStatus === "reserved" && row.reservationAmountMinor === row.grossAmountMinor;
+    const offerWinnerAvailable = winnerRewardType !== "stablecoin" && typeof row.reservationId === "string" && row.reservationId.startsWith("offer:") &&
+      row.grossAmountMinor === 0 && row.receiverAmountMinor === 0 && row.operatorAmountMinor === 0;
+    if (row.campaignStatus !== "active" || (!cashWinnerAvailable && !offerWinnerAvailable)) {
       return { status: "no_fill", opportunityId, auctionId, reason: "winner_unavailable" };
     }
     const placementId = `placement:${opportunityId}`;
@@ -209,7 +218,7 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
     return {
       status: "winner", opportunityId, auctionId, placementId, campaignId: text(row.campaignId),
       reservationId: text(row.reservationId), eligibleBidderCount: integer(row.eligibleBidderCount),
-      rewardType: text(row.rewardType) as RewardType, grossAmountMinor: integer(row.grossAmountMinor),
+      rewardType: winnerRewardType, grossAmountMinor: integer(row.grossAmountMinor),
       receiverAmountMinor: integer(row.receiverAmountMinor), operatorAmountMinor: integer(row.operatorAmountMinor),
       currency: "USD", signedPlacement,
     };
@@ -222,19 +231,22 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
 
   async createOrGetClaim(record: SponsorshipClaimRecord): Promise<SponsorshipClaimRecord> {
     await this.#db.prepare(`INSERT INTO placement_claims
-      (id, placement_id, opportunity_id, reservation_id, receiver_profile_id, installation_id, consent_version,
+      (id, placement_id, opportunity_id, reservation_id, reward_reference_id, receiver_profile_id, installation_id, consent_version,
        device_key_thumbprint, creative_digest, state, grant_json, issued_at, expires_at)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'claimed', ?, ?, ? FROM opportunities o
+      SELECT ?, ?, ?, CASE WHEN b.reward_lane = 'stablecoin' THEN ? ELSE NULL END, ?, ?, ?, ?, ?, ?, 'claimed', ?, ?, ? FROM opportunities o
       JOIN placements p ON p.id = ? AND p.opportunity_id = o.id AND p.state = 'won'
       JOIN auctions a ON a.opportunity_id = o.id
       JOIN auction_decisions d ON d.auction_id = a.id
       JOIN auction_bids b ON b.id = d.winner_bid_id
-      JOIN campaign_budget_reservations r ON r.id = d.reservation_id AND r.campaign_id = b.campaign_id
+      LEFT JOIN campaign_budget_reservations r ON r.id = d.reservation_id AND r.campaign_id = b.campaign_id
       WHERE o.id = ? AND o.state = 'won' AND o.receiver_profile_id = ? AND o.installation_id = ?
         AND o.consent_version = ? AND o.expires_at > ? AND d.reservation_id = ?
-        AND b.campaign_id = ? AND r.status = 'reserved' AND r.amount_minor = ? AND p.gross_amount_minor = ?
+        AND b.campaign_id = ? AND p.gross_amount_minor = ?
+        AND ((b.reward_lane = 'stablecoin' AND r.status = 'reserved' AND r.amount_minor = ?)
+          OR (b.reward_lane IN ('credits', 'discount') AND d.reservation_id LIKE 'offer:%'
+            AND b.gross_amount_minor = 0 AND b.receiver_amount_minor = 0 AND b.operator_amount_minor = 0))
       ON CONFLICT(opportunity_id) DO NOTHING`)
-      .bind(record.claimId, record.placementId, record.opportunityId, record.reservationId, record.receiverProfileId,
+      .bind(record.claimId, record.placementId, record.opportunityId, record.reservationId, record.reservationId, record.receiverProfileId,
         record.installationId, record.consentVersion, record.deviceKeyThumbprint, record.creativeDigest,
         JSON.stringify(record.grant), record.issuedAt, record.expiresAt, record.placementId, record.opportunityId,
         record.receiverProfileId, record.installationId, record.consentVersion, record.issuedAt, record.reservationId,
@@ -265,14 +277,21 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
       p.signed_placement_json AS signedPlacementJson
       FROM placement_claims pc JOIN auctions a ON a.opportunity_id = pc.opportunity_id
       JOIN auction_decisions d ON d.auction_id = a.id JOIN auction_bids b ON b.id = d.winner_bid_id
-      JOIN campaign_budget_reservations r ON r.id = d.reservation_id JOIN placements p ON p.id = pc.placement_id
+      LEFT JOIN campaign_budget_reservations r ON r.id = d.reservation_id JOIN placements p ON p.id = pc.placement_id
       WHERE pc.id = ?`).bind(value.claimId).first<Row>();
-    if (!row || text(row.reservationId) !== value.reservationId || !["reserved", "committed"].includes(text(row.reservationStatus)) ||
-      integer(row.reservationAmountMinor) !== integer(row.grossAmountMinor)) throw new Error("Winning settlement outcome is unavailable");
+    if (!row || text(row.reservationId) !== value.reservationId) throw new Error("Winning settlement outcome is unavailable");
+    const winnerRewardType = text(row.rewardType) as RewardType;
+    if (winnerRewardType === "stablecoin") {
+      if (!["reserved", "committed", "released"].includes(text(row.reservationStatus)) || integer(row.reservationAmountMinor) !== integer(row.grossAmountMinor)) {
+        throw new Error("Winning settlement outcome is unavailable");
+      }
+    } else if (!value.reservationId.startsWith("offer:") || integer(row.grossAmountMinor) !== 0 || integer(row.receiverAmountMinor) !== 0 || integer(row.operatorAmountMinor) !== 0) {
+      throw new Error("Winning offer outcome is unavailable");
+    }
     return {
       status: "winner", opportunityId: value.opportunityId, auctionId: text(row.auctionId), placementId: value.placementId,
       campaignId: text(row.campaignId), reservationId: value.reservationId, eligibleBidderCount: integer(row.eligibleBidderCount),
-      rewardType: text(row.rewardType) as RewardType, grossAmountMinor: integer(row.grossAmountMinor),
+      rewardType: winnerRewardType, grossAmountMinor: integer(row.grossAmountMinor),
       receiverAmountMinor: integer(row.receiverAmountMinor), operatorAmountMinor: integer(row.operatorAmountMinor), currency: "USD",
       signedPlacement: JSON.parse(text(row.signedPlacementJson)),
     };
@@ -306,28 +325,53 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
     claim: SponsorshipClaimRecord; lease: SponsorshipDeliveryLease; receipt: SignedDisplayReceipt; receiptDigest: string;
     now: Date; graceExpiresAt: string; settlementReviewDeadlineAt: string;
   }): Promise<ReceiptAcceptance> {
-    const inserted = await this.#db.prepare(`INSERT INTO placement_receipt_recovery
-      (claim_id, placement_id, lease_id, display_receipt_digest, state, policy_version, resolution_authority,
-       displayed_at, grace_expires_at, settlement_review_deadline_at, receipt_submitted_at)
-      VALUES (?, ?, ?, ?, 'submitted', ?, 'operator_dual_control', ?, ?, ?, ?) ON CONFLICT(claim_id) DO NOTHING`)
-      .bind(input.claim.claimId, input.claim.placementId, input.lease.leaseId, input.receiptDigest, input.lease.policyVersion,
-        input.receipt.payload.displayedAt, input.graceExpiresAt, input.settlementReviewDeadlineAt, input.now.toISOString()).run();
+    const existing = await this.#db.prepare(`SELECT display_receipt_digest AS receiptDigest
+      FROM placement_receipt_recovery WHERE claim_id = ?`).bind(input.claim.claimId).first<{ receiptDigest: string }>();
+    if (existing && existing.receiptDigest !== input.receiptDigest) throw new Error("A different first verified surface already won");
+    const [, inserted] = await this.#db.batch([
+      this.#db.prepare(`UPDATE placement_claims SET state = 'displayed_pending_receipt'
+        WHERE id = ? AND state = 'delivery_leased'`).bind(input.claim.claimId),
+      this.#db.prepare(`INSERT INTO placement_receipt_recovery
+        (claim_id, placement_id, lease_id, display_receipt_digest, display_receipt_json, state, policy_version, resolution_authority,
+         displayed_at, grace_expires_at, settlement_review_deadline_at, receipt_submitted_at)
+        SELECT ?, ?, ?, ?, ?, 'submitted', ?, 'operator_dual_control', ?, ?, ?, ?
+        FROM placement_claims WHERE id = ? AND state = 'displayed_pending_receipt'
+        ON CONFLICT(claim_id) DO NOTHING`)
+        .bind(input.claim.claimId, input.claim.placementId, input.lease.leaseId, input.receiptDigest, JSON.stringify(input.receipt), input.lease.policyVersion,
+          input.receipt.payload.displayedAt, input.graceExpiresAt, input.settlementReviewDeadlineAt, input.now.toISOString(), input.claim.claimId),
+      this.#db.prepare(`UPDATE placement_delivery_leases SET state = 'displayed', displayed_at = COALESCE(displayed_at, ?)
+        WHERE claim_id = ? AND state IN ('active', 'displayed')
+          AND EXISTS (SELECT 1 FROM placement_receipt_recovery WHERE claim_id = ? AND display_receipt_digest = ?)`)
+        .bind(input.receipt.payload.displayedAt, input.claim.claimId, input.claim.claimId, input.receiptDigest),
+      this.#db.prepare(`UPDATE placements SET state = 'displayed_pending_receipt', delivery_status = 'displaying', updated_at = ?
+        WHERE id = ? AND state = 'delivery_leased'
+          AND EXISTS (SELECT 1 FROM placement_receipt_recovery WHERE claim_id = ? AND display_receipt_digest = ?)`)
+        .bind(input.now.toISOString(), input.claim.placementId, input.claim.claimId, input.receiptDigest),
+      this.#db.prepare(`UPDATE placement_claims SET state = 'consumed', consumed_at = COALESCE(consumed_at, ?)
+        WHERE id = ? AND state = 'displayed_pending_receipt'
+          AND EXISTS (SELECT 1 FROM placement_receipt_recovery WHERE claim_id = ? AND display_receipt_digest = ?)`)
+        .bind(input.now.toISOString(), input.claim.claimId, input.claim.claimId, input.receiptDigest),
+      this.#db.prepare(`UPDATE placements SET state = 'delivered', delivery_status = 'delivered', host_kind = ?,
+        host_session_id = ?, host_turn_id = ?, host_receipt_json = ?, rendered_response_sha256 = ?, updated_at = ?
+        WHERE id = ? AND state IN ('displayed_pending_receipt', 'delivered')
+          AND EXISTS (SELECT 1 FROM placement_receipt_recovery WHERE claim_id = ? AND display_receipt_digest = ?)`)
+        .bind(input.receipt.payload.hostKind, input.receipt.payload.hostSessionId, input.receipt.payload.hostTurnId ?? null,
+          JSON.stringify(input.receipt), input.receipt.payload.outputSha256, input.now.toISOString(), input.claim.placementId,
+          input.claim.claimId, input.receiptDigest),
+    ]);
     const row = await this.#db.prepare("SELECT display_receipt_digest AS receiptDigest, state, grace_expires_at AS graceExpiresAt FROM placement_receipt_recovery WHERE claim_id = ?")
       .bind(input.claim.claimId).first<{ receiptDigest: string; state: string; graceExpiresAt: string }>();
     if (!row) throw new Error("Receipt recovery persistence failed");
     if (row.receiptDigest !== input.receiptDigest) throw new Error("A different first verified surface already won");
     if (row.state === "settlement_review") throw new Error("Receipt recovery requires settlement review");
     if (row.state !== "settled" && Date.parse(row.graceExpiresAt) <= input.now.getTime()) throw new Error("Receipt recovery grace period expired");
-    await this.#db.batch([
-      this.#db.prepare("UPDATE placement_claims SET state = 'consumed', consumed_at = COALESCE(consumed_at, ?) WHERE id = ? AND state IN ('claimed', 'delivery_leased', 'displayed_pending_receipt', 'consumed')")
-        .bind(input.now.toISOString(), input.claim.claimId),
-      this.#db.prepare("UPDATE placement_delivery_leases SET state = 'displayed', displayed_at = COALESCE(displayed_at, ?) WHERE claim_id = ? AND state IN ('active', 'displayed')")
-        .bind(input.receipt.payload.displayedAt, input.claim.claimId),
-      this.#db.prepare(`UPDATE placements SET state = 'delivered', delivery_status = 'delivered', host_kind = ?,
-        host_session_id = ?, host_turn_id = ?, host_receipt_json = ?, rendered_response_sha256 = ?, updated_at = ? WHERE id = ? AND state IN ('claimed', 'delivery_leased', 'delivered')`)
-        .bind(input.receipt.payload.hostKind, input.receipt.payload.hostSessionId, input.receipt.payload.hostTurnId ?? null,
-          JSON.stringify(input.receipt), input.receipt.payload.outputSha256, input.now.toISOString(), input.claim.placementId),
-    ]);
+    const durable = await this.#db.prepare(`SELECT pc.state AS claimState, p.state AS placementState, pdl.state AS leaseState
+      FROM placement_claims pc JOIN placements p ON p.id = pc.placement_id
+      JOIN placement_delivery_leases pdl ON pdl.claim_id = pc.id WHERE pc.id = ?`)
+      .bind(input.claim.claimId).first<{ claimState: string; placementState: string; leaseState: string }>();
+    if (!durable || durable.claimState !== "consumed" || durable.placementState !== "delivered" || durable.leaseState !== "displayed") {
+      throw new Error("Receipt display transition did not persist");
+    }
     return { receiptDigest: row.receiptDigest, firstSurface: (inserted.meta.changes ?? 0) === 1, settlementState: row.state === "settled" ? "settled" : "pending" };
   }
 
@@ -338,29 +382,42 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
     ]);
   }
 
-  async listExpirable(now: Date, deliveryLeaseReviewBefore: Date) {
+  async listExpirable(now: Date, deliveryLeaseReviewBefore: Date, limit: number) {
     const rows = await this.#db.prepare(`${CLAIM_SELECT}
-      JOIN campaign_budget_reservations cbr ON cbr.id = pc.reservation_id
+      LEFT JOIN campaign_budget_reservations cbr ON cbr.id = pc.reservation_id
+      JOIN auctions a ON a.opportunity_id = pc.opportunity_id
       LEFT JOIN placement_delivery_leases pdl ON pdl.claim_id = pc.id
       LEFT JOIN placement_receipt_recovery prr ON prr.claim_id = pc.id
-      WHERE (pc.state IN ('claimed', 'expired', 'cancelled') AND pc.expires_at <= ? AND cbr.status = 'reserved')
+      WHERE (pc.state IN ('claimed', 'expired', 'cancelled') AND pc.expires_at <= ?
+          AND (cbr.status = 'reserved' OR (a.reward_lane IN ('credits', 'discount') AND pc.reward_reference_id LIKE 'offer:%')))
          OR (pc.state = 'delivery_leased' AND pdl.expires_at <= ?)
          OR (pc.state = 'displayed_pending_receipt' AND pc.expires_at <= ?)
-         OR (pc.state = 'consumed' AND prr.state = 'submitted' AND prr.grace_expires_at <= ?)`)
-      .bind(now.toISOString(), deliveryLeaseReviewBefore.toISOString(), now.toISOString(), now.toISOString()).all<Row>();
-    return rows.results.map(claim);
+         OR (pc.state = 'consumed' AND prr.state = 'submitted' AND prr.grace_expires_at <= ?)
+      ORDER BY CASE
+        WHEN pc.state = 'delivery_leased' THEN pdl.expires_at
+        WHEN pc.state = 'consumed' THEN prr.grace_expires_at
+        ELSE pc.expires_at
+      END ASC, pc.id ASC LIMIT ?`)
+      .bind(now.toISOString(), deliveryLeaseReviewBefore.toISOString(), now.toISOString(), now.toISOString(), limit + 1).all<Row>();
+    return { items: rows.results.slice(0, limit).map(claim), hasMore: rows.results.length > limit };
   }
 
-  async listExpiredUnclaimedReservations(now: Date): Promise<readonly ExpiredUnclaimedReservation[]> {
+  async listExpiredUnclaimedReservations(now: Date, limit: number) {
     const rows = await this.#db.prepare(`SELECT o.id AS opportunityId, b.campaign_id AS campaignId, d.reservation_id AS reservationId
       FROM opportunities o JOIN auctions a ON a.opportunity_id = o.id JOIN auction_decisions d ON d.auction_id = a.id
-      JOIN auction_bids b ON b.id = d.winner_bid_id JOIN campaign_budget_reservations r ON r.id = d.reservation_id
+      JOIN auction_bids b ON b.id = d.winner_bid_id LEFT JOIN campaign_budget_reservations r ON r.id = d.reservation_id
       LEFT JOIN placement_claims pc ON pc.opportunity_id = o.id
       WHERE ((o.state = 'won' AND o.expires_at <= ?)
           OR (o.state = 'expired' AND o.invalidated_reason = 'unclaimed_expiry'))
-        AND pc.id IS NULL AND r.status = 'reserved'`)
-      .bind(now.toISOString()).all<Row>();
-    return rows.results.map((row) => ({ opportunityId: text(row.opportunityId), campaignId: text(row.campaignId), reservationId: text(row.reservationId) }));
+        AND pc.id IS NULL AND (r.status = 'reserved' OR (b.reward_lane IN ('credits', 'discount') AND d.reservation_id LIKE 'offer:%'))
+      ORDER BY o.expires_at ASC, o.id ASC LIMIT ?`)
+      .bind(now.toISOString(), limit + 1).all<Row>();
+    return {
+      items: rows.results.slice(0, limit).map((row) => ({
+        opportunityId: text(row.opportunityId), campaignId: text(row.campaignId), reservationId: text(row.reservationId),
+      })),
+      hasMore: rows.results.length > limit,
+    };
   }
 
   async expireUnclaimedOpportunity(opportunityId: string, now: Date): Promise<boolean> {
@@ -390,19 +447,69 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
     return false;
   }
 
-  async moveToSettlementReview(claimId: string, now: Date) {
-    const result = await this.#db.prepare("UPDATE placement_claims SET state = 'settlement_review' WHERE id = ? AND state IN ('delivery_leased', 'displayed_pending_receipt', 'consumed')").bind(claimId).run();
-    if ((result.meta.changes ?? 0) === 1) {
-      await this.#db.batch([
-        this.#db.prepare("UPDATE placement_receipt_recovery SET state = 'settlement_review' WHERE claim_id = ? AND state IN ('submitted', 'pending')").bind(claimId),
-        this.#db.prepare("UPDATE placements SET state = 'settlement_review', updated_at = ? WHERE id = (SELECT placement_id FROM placement_claims WHERE id = ?)").bind(now.toISOString(), claimId),
-      ]);
-      return true;
-    }
-    return false;
+  async cancelUndisplayed(claimId: string, now: Date) {
+    const result = await this.#db.prepare(`UPDATE placement_claims SET state = 'cancelled', cancelled_at = COALESCE(cancelled_at, ?)
+      WHERE id = ? AND state = 'delivery_leased'
+        AND NOT EXISTS (SELECT 1 FROM placement_receipt_recovery WHERE claim_id = placement_claims.id)
+        AND EXISTS (SELECT 1 FROM placement_delivery_leases WHERE claim_id = placement_claims.id AND state = 'active')`)
+      .bind(now.toISOString(), claimId).run();
+    if ((result.meta.changes ?? 0) !== 1) return false;
+    await this.#db.batch([
+      this.#db.prepare("UPDATE placement_delivery_leases SET state = 'cancelled' WHERE claim_id = ? AND state = 'active'").bind(claimId),
+      this.#db.prepare("UPDATE placements SET state = 'cancelled', delivery_status = 'blocked', updated_at = ? WHERE id = (SELECT placement_id FROM placement_claims WHERE id = ?)").bind(now.toISOString(), claimId),
+    ]);
+    return true;
+  }
+
+  async moveToSettlementReview(claimId: string, now: Date, deadline: Date) {
+    const startedAt = now.toISOString();
+    const [result] = await this.#db.batch([
+      this.#db.prepare(`UPDATE placement_claims SET state = 'settlement_review',
+        settlement_review_started_at = ?, settlement_review_deadline_at = ?
+        WHERE id = ? AND state IN ('delivery_leased', 'displayed_pending_receipt', 'consumed')`)
+        .bind(startedAt, deadline.toISOString(), claimId),
+      this.#db.prepare(`UPDATE placement_receipt_recovery SET state = 'settlement_review'
+        WHERE claim_id = ? AND state IN ('submitted', 'pending')
+          AND EXISTS (SELECT 1 FROM placement_claims WHERE id = ? AND state = 'settlement_review' AND settlement_review_started_at = ?)`)
+        .bind(claimId, claimId, startedAt),
+      this.#db.prepare(`UPDATE placements SET state = 'settlement_review', updated_at = ?
+        WHERE id = (SELECT placement_id FROM placement_claims WHERE id = ? AND state = 'settlement_review' AND settlement_review_started_at = ?)`)
+        .bind(startedAt, claimId, startedAt),
+    ]);
+    return (result.meta.changes ?? 0) === 1;
+  }
+
+  async getSettlementReview(claimId: string) {
+    const reviewSelect = CLAIM_SELECT.replace(" FROM placement_claims pc", ", prr.display_receipt_json AS displayReceiptJson FROM placement_claims pc");
+    const row = await this.#db.prepare(`${reviewSelect}
+      LEFT JOIN placement_receipt_recovery prr ON prr.claim_id = pc.id
+      WHERE pc.id = ? AND pc.state = 'settlement_review'`).bind(claimId).first<Row>();
+    return row ? {
+      claim: claim(row),
+      ...(row.displayReceiptJson ? { receipt: JSON.parse(text(row.displayReceiptJson)) as SignedDisplayReceipt } : {}),
+    } : undefined;
+  }
+
+  async resolveSettlementReview(claimId: string, resolution: "settled" | "released", now: Date): Promise<boolean> {
+    const [result] = await this.#db.batch([
+      this.#db.prepare(`UPDATE placement_claims SET state = ?, cancelled_at = CASE WHEN ? = 'released' THEN COALESCE(cancelled_at, ?) ELSE cancelled_at END
+        WHERE id = ? AND state = 'settlement_review'`).bind(
+          resolution === "settled" ? "consumed" : "expired", resolution, now.toISOString(), claimId,
+        ),
+      this.#db.prepare(`UPDATE placement_receipt_recovery SET state = ?, resolved_at = ? WHERE claim_id = ? AND state = 'settlement_review'`)
+        .bind(resolution === "settled" ? "settled" : "cancelled", now.toISOString(), claimId),
+      this.#db.prepare(`UPDATE placement_delivery_leases SET state = CASE WHEN ? = 'released' THEN 'expired' ELSE state END WHERE claim_id = ?`)
+        .bind(resolution, claimId),
+      this.#db.prepare(`UPDATE placements SET state = ?, delivery_status = CASE WHEN ? = 'released' THEN 'expired' ELSE delivery_status END, updated_at = ?
+        WHERE id = (SELECT placement_id FROM placement_claims WHERE id = ?)`).bind(
+          resolution === "settled" ? "settled" : "cancelled", resolution, now.toISOString(), claimId,
+        ),
+    ]);
+    return (result.meta.changes ?? 0) === 1;
   }
 
   async markReservationReleased(reservationId: string): Promise<void> {
+    if (reservationId.startsWith("offer:")) return;
     const reservation = await this.#db.prepare("SELECT status FROM campaign_budget_reservations WHERE id = ?")
       .bind(reservationId).first<{ status: string }>();
     if (reservation?.status !== "released") throw new Error("Campaign reservation release did not persist");
@@ -412,10 +519,16 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
 export class D1SponsorshipSettlementGateway implements SponsorshipSettlementGateway {
   readonly #db: D1Database;
   readonly #ledger: LedgerService;
-  constructor(db: D1Database) { this.#db = db; this.#ledger = new LedgerService(new D1LedgerRepository(db)); }
+  readonly #environment: Environment;
+  constructor(db: D1Database, environment: Environment = "test") {
+    this.#db = db;
+    this.#ledger = new LedgerService(new D1LedgerRepository(db));
+    this.#environment = environment;
+  }
 
   async settle(input: { claim: SponsorshipClaimRecord; outcome: SponsorshipOutcome & { status: "winner" }; receipt: SignedDisplayReceipt }) {
-    if (input.outcome.rewardType !== "stablecoin") throw new Error("Receiver pull settlement currently supports stablecoin auctions only");
+    if (input.outcome.rewardType !== "stablecoin") return;
+    assertProductionCashSettlementCapability(this.#environment);
     const reservation = await this.#db.prepare("SELECT status, amount_minor AS amountMinor FROM campaign_budget_reservations WHERE id = ? AND campaign_id = ?")
       .bind(input.claim.reservationId, input.outcome.campaignId).first<{ status: string; amountMinor: number }>();
     if (reservation?.amountMinor !== input.outcome.grossAmountMinor) throw new Error("Winning reservation amount does not match auction economics");
@@ -445,6 +558,7 @@ export class D1SponsorshipSettlementGateway implements SponsorshipSettlementGate
   }
 
   async release(input: { campaignId: string; reservationId: string; claimId: string }) {
+    if (input.reservationId.startsWith("offer:")) return;
     const unclaimedOpportunityId = input.claimId.startsWith("unclaimed:") ? input.claimId.slice("unclaimed:".length) : undefined;
     await this.#db.prepare(`UPDATE campaign_budget_reservations SET status = 'released', released_at = ?
       WHERE id = ? AND campaign_id = ? AND status = 'reserved'
@@ -458,9 +572,11 @@ let cachedRuntime: SponsorshipRuntime | undefined;
 export async function deployedSponsorshipRuntime(): Promise<SponsorshipRuntime> {
   if (cachedRuntime) return cachedRuntime;
   const { env } = await import("cloudflare:workers");
-  if (!env.DB || !env.AD_DADDY_SPONSORSHIP_SIGNING_PRIVATE_KEY || !env.AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID) {
+  if (!env.DB || !env.AD_DADDY_SPONSORSHIP_SIGNING_PRIVATE_KEY || !env.AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID || !env.AD_DADDY_LAUNCH_POLICY_JSON) {
     throw new Error("Sponsorship D1 and signing secret bindings are required");
   }
+  const policy = parseLaunchPolicy(JSON.parse(env.AD_DADDY_LAUNCH_POLICY_JSON));
+  if (policy.environment !== env.AD_DADDY_ENV) throw new Error("Launch policy environment does not match the deployed environment");
   const repository = new D1SponsorshipClaimRepository(env.DB, {
     auctionGateway: cloudflareAuctionGateway,
     keyId: env.AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID,
@@ -474,8 +590,11 @@ export async function deployedSponsorshipRuntime(): Promise<SponsorshipRuntime> 
     service: new SponsorshipClaimService(repository, {
       keyId: env.AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID,
       privateKeyPem: env.AD_DADDY_SPONSORSHIP_SIGNING_PRIVATE_KEY,
-      claimTtlMs: 15 * 60_000, leaseTtlMs: 60_000, receiptGraceMs: 24 * 60 * 60_000,
-      settlementReviewMs: 7 * 24 * 60 * 60_000, settlement: new D1SponsorshipSettlementGateway(env.DB),
+      claimTtlMs: policy.deliveryDeadlineSeconds.value * 1_000,
+      leaseTtlMs: policy.creativeRedemptionLeaseSeconds.value * 1_000,
+      receiptGraceMs: policy.receiptSubmissionGraceSeconds.value * 1_000,
+      settlementReviewMs: policy.settlementReviewSlaHours.value * 60 * 60_000,
+      settlement: new D1SponsorshipSettlementGateway(env.DB, env.AD_DADDY_ENV),
       environment: env.AD_DADDY_ENV,
     }),
   };
@@ -483,7 +602,7 @@ export async function deployedSponsorshipRuntime(): Promise<SponsorshipRuntime> 
 }
 
 const CLAIM_SELECT = `SELECT pc.id AS claimId, pc.placement_id AS placementId, pc.opportunity_id AS opportunityId,
-  pc.reservation_id AS reservationId, pc.receiver_profile_id AS receiverProfileId, pc.installation_id AS installationId,
+  pc.reward_reference_id AS reservationId, pc.receiver_profile_id AS receiverProfileId, pc.installation_id AS installationId,
   pc.consent_version AS consentVersion, pc.device_key_thumbprint AS deviceKeyThumbprint, pc.creative_digest AS creativeDigest,
   pc.state, pc.grant_json AS grantJson, pc.issued_at AS issuedAt, pc.expires_at AS expiresAt FROM placement_claims pc`;
 const LEASE_SELECT = `SELECT id AS leaseId, claim_id AS claimId, installation_id AS installationId,
@@ -514,10 +633,16 @@ function stringArray(value: unknown, maximumItems: number, maximumLength: number
   return [...new Set(parsed)];
 }
 function rewardType(value: unknown): RewardType {
-  if (Array.isArray(value) && value.includes("stablecoin")) return "stablecoin";
-  throw new Error("Receiver pull auctions currently require the stablecoin reward lane");
+  if (!Array.isArray(value)) throw new Error("Receiver reward preferences are missing");
+  for (const lane of ["stablecoin", "credits", "discount"] as const) if (value.includes(lane)) return lane;
+  throw new Error("Receiver has no supported reward lane");
 }
 function signalNames(fields: Record<string, unknown>): string[] {
   const values = [fields.coarseLocation, ...(Array.isArray(fields.privateRepoTechStacks) ? fields.privateRepoTechStacks.flat() : [])];
   return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 80))].slice(0, 20);
+}
+
+async function privateCoalescingKey(installationId: string, consentVersion: number, bucket: number): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${installationId}\u0000${consentVersion}\u0000${bucket}`));
+  return `private_${Buffer.from(digest).toString("base64url")}`;
 }

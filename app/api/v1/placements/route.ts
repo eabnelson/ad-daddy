@@ -1,17 +1,31 @@
-import { placementDeliveryRepository } from "../../../../lib/marketplace/placement-registry.ts";
-import type { PlacementDeliveryRepository } from "../../../../lib/marketplace/placement-delivery.ts";
+import { getPlacementDeliveryRepository } from "../../../../lib/marketplace/placement-registry.ts";
+import {
+  PlacementPaginationError,
+  assertPageInput,
+  type PlacementDeliveryRecord,
+  type PlacementDeliveryRepository,
+  type PlacementPageInput,
+} from "../../../../lib/marketplace/placement-delivery.ts";
+import { authenticateAccountRequest } from "../../../../lib/auth/account-agent-token.ts";
 
-export function createPlacementHistoryHandler(repository: PlacementDeliveryRepository = placementDeliveryRepository) {
+export function createPlacementHistoryHandler(repository?: PlacementDeliveryRepository) {
   return async function handle(request: Request): Promise<Response> {
-    const accountId = request.headers.get("oai-authenticated-user-id");
+    const activeRepository = repository ?? await getPlacementDeliveryRepository();
+    const accountId = await authenticateAccountRequest(request, "placement:read");
     if (!accountId) return Response.json({ error: "human_authentication_required" }, { status: 401 });
-    const placements = await repository.listByReceiver(accountId);
-    return Response.json({ placements: placements.map(receiverView) });
+    try {
+      const pageInput = placementPageInput(request);
+      const page = await activeRepository.listByReceiver(accountId, pageInput);
+      return Response.json({ placements: page.placements.map(receiverView), nextCursor: page.nextCursor });
+    } catch (error) {
+      if (error instanceof PlacementPaginationError) return Response.json({ error: "invalid_pagination" }, { status: 400 });
+      throw error;
+    }
   };
 }
 export const GET = createPlacementHistoryHandler();
 
-function receiverView(record: Awaited<ReturnType<PlacementDeliveryRepository["listByReceiver"]>>[number]) {
+function receiverView(record: PlacementDeliveryRecord) {
   const payload = record.validatedCreative.payload;
   return {
     placementId: record.placementId, status: record.status, advertiser: payload.advertiser.displayName,
@@ -27,4 +41,14 @@ function receiverView(record: Awaited<ReturnType<PlacementDeliveryRepository["li
     payoutState: record.status === "delivered" ? "pending" : "unavailable",
     controls: ["hide", "block_advertiser", "report"], receiverAction: record.receiverAction ?? null,
   };
+}
+
+function placementPageInput(request: Request): PlacementPageInput {
+  const url = new URL(request.url);
+  const input = {
+    limit: Number(url.searchParams.get("limit") ?? 50),
+    ...(url.searchParams.has("cursor") ? { cursor: url.searchParams.get("cursor") ?? "" } : {}),
+  };
+  assertPageInput(input);
+  return input;
 }

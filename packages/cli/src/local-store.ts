@@ -33,6 +33,7 @@ export interface LocalStore {
   get(installationId: string): Promise<LocalInstallationConfig | undefined>;
   put(config: LocalInstallationConfig): Promise<void>;
   list(): Promise<readonly LocalInstallationConfig[]>;
+  markCheckedIfCurrent(installationId: string, consentVersion: number, checkedAt: string): Promise<boolean>;
 }
 
 export class MemoryLocalStore implements LocalStore {
@@ -40,6 +41,12 @@ export class MemoryLocalStore implements LocalStore {
   async get(id: string) { const value = this.#records.get(id); return value ? structuredClone(value) : undefined; }
   async put(config: LocalInstallationConfig) { this.#records.set(config.installationId, structuredClone(config)); }
   async list() { return [...this.#records.values()].map((value) => structuredClone(value)); }
+  async markCheckedIfCurrent(id: string, consentVersion: number, checkedAt: string) {
+    const value = this.#records.get(id);
+    if (!value || value.status !== "active" || value.consentVersion !== consentVersion) return false;
+    value.lastCheckedAt = checkedAt;
+    return true;
+  }
 }
 
 export class JsonLocalStore implements LocalStore {
@@ -50,10 +57,27 @@ export class JsonLocalStore implements LocalStore {
   async list() { await this.#writeTail; return this.readRaw(); }
   async put(config: LocalInstallationConfig) {
     assertLocalConfig(config);
-    const operation = this.#writeTail.then(async () => {
-      const records = await this.readRaw();
+    await this.mutateRecords((records) => {
       const index = records.findIndex((value) => value.installationId === config.installationId);
       if (index === -1) records.push(structuredClone(config)); else records[index] = structuredClone(config);
+      return true;
+    });
+  }
+  async markCheckedIfCurrent(installationId: string, consentVersion: number, checkedAt: string) {
+    let updated = false;
+    await this.mutateRecords((records) => {
+      const config = records.find((value) => value.installationId === installationId);
+      if (!config || config.status !== "active" || config.consentVersion !== consentVersion) return false;
+      config.lastCheckedAt = checkedAt;
+      updated = true;
+      return true;
+    });
+    return updated;
+  }
+  private async mutateRecords(mutate: (records: LocalInstallationConfig[]) => boolean): Promise<void> {
+    const operation = this.#writeTail.then(async () => {
+      const records = await this.readRaw();
+      if (!mutate(records)) return;
       await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
       const temporaryPath = `${this.#path}.${crypto.randomUUID()}.tmp`;
       await writeFile(temporaryPath, `${JSON.stringify(records, null, 2)}\n`, { mode: 0o600 });

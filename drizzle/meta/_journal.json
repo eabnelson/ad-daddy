@@ -64,6 +64,55 @@
       "when": 1786833324673,
       "tag": "0008_clumsy_iron_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786840629534,
+      "tag": "0009_faithful_spot",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786841004368,
+      "tag": "0010_tough_dormammu",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786841118958,
+      "tag": "0011_bizarre_jamie_braddock",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1786842103833,
+      "tag": "0012_flaky_scalphunter",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786842283987,
+      "tag": "0013_sad_the_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1786842760197,
+      "tag": "0014_wakeful_whiplash",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1786845546920,
+      "tag": "0015_mysterious_garia",
+      "breakpoints": true
     }
   ]
 }

@@ -35,7 +35,7 @@ export class D1LedgerRepository implements LedgerRepository {
     }
     statements.push(this.#db.prepare(`INSERT INTO ledger_transactions
       (id, idempotency_key, request_fingerprint, kind, currency, reference_id, revenue_split_version, entry_count, balance_minor, chain_reference, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'posted', ?)`)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'draft', ?)`)
       .bind(transaction.transactionId, transaction.idempotencyKey, transaction.inputFingerprint, transaction.kind, transaction.currency,
         transaction.referenceId, transaction.splitVersion ?? null, transaction.entries.length, transaction.chainReference ?? null, transaction.createdAt));
     transaction.entries.forEach((entry, index) => {
@@ -43,6 +43,8 @@ export class D1LedgerRepository implements LedgerRepository {
         (id, transaction_id, account_id, currency, amount_minor, memo, sequence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(entry.entryId, transaction.transactionId, entry.accountId, entry.currency, entry.amountMinor, entry.memo ?? null, index + 1, transaction.createdAt));
     });
+    statements.push(this.#db.prepare("UPDATE ledger_transactions SET status = 'posted' WHERE id = ? AND status = 'draft'")
+      .bind(transaction.transactionId));
     try {
       await this.#db.batch(statements);
       return structuredClone(transaction);
@@ -56,6 +58,32 @@ export class D1LedgerRepository implements LedgerRepository {
   async list(): Promise<readonly LedgerTransaction[]> {
     const result = await this.#db.prepare("SELECT id FROM ledger_transactions WHERE status = 'posted' ORDER BY created_at, id").all<{ id: string }>();
     return Promise.all(result.results.map((row) => this.findByTransactionId(row.id))).then((rows) => rows.filter((row): row is LedgerTransaction => Boolean(row)));
+  }
+
+  async listForAccounts(accountIds: readonly string[], input: { limit: number; cursor?: string }) {
+    if (accountIds.length < 1 || accountIds.length > 4 || input.limit < 1 || input.limit > 100) throw new Error("Ledger page request is invalid");
+    let cursorCreatedAt: string | undefined;
+    let cursorId: string | undefined;
+    if (input.cursor) {
+      const decoded = Buffer.from(input.cursor, "base64url").toString("utf8").split("\0");
+      if (decoded.length !== 2 || !decoded[0] || !decoded[1]) throw new Error("Ledger cursor is invalid");
+      [cursorCreatedAt, cursorId] = decoded;
+    }
+    const accountPlaceholders = accountIds.map(() => "?").join(", ");
+    const cursorClause = cursorCreatedAt ? "AND (t.created_at < ? OR (t.created_at = ? AND t.id < ?))" : "";
+    const rows = await this.#db.prepare(`WITH page AS (
+      SELECT t.* FROM ledger_transactions t WHERE t.status = 'posted'
+        AND EXISTS (SELECT 1 FROM ledger_entries owned WHERE owned.transaction_id = t.id AND owned.account_id IN (${accountPlaceholders}))
+        ${cursorClause} ORDER BY t.created_at DESC, t.id DESC LIMIT ?
+      ) SELECT page.id, page.idempotency_key AS idempotencyKey, page.request_fingerprint AS inputFingerprint,
+        page.kind, page.currency, page.reference_id AS referenceId, page.revenue_split_version AS splitVersion,
+        page.chain_reference AS chainReference, page.created_at AS createdAt, e.id AS entryId, e.account_id AS accountId,
+        e.amount_minor AS amountMinor, e.currency AS entryCurrency, e.memo, e.sequence
+      FROM page JOIN ledger_entries e ON e.transaction_id = page.id ORDER BY page.created_at DESC, page.id DESC, e.sequence`)
+      .bind(...accountIds, ...(cursorCreatedAt ? [cursorCreatedAt, cursorCreatedAt, cursorId] : []), input.limit).all<Row>();
+    const transactions = transactionsFromJoinedRows(rows.results ?? []);
+    const last = transactions.at(-1);
+    return { transactions, nextCursor: transactions.length === input.limit && last ? Buffer.from(`${last.createdAt}\0${last.transactionId}`).toString("base64url") : null };
   }
 
   private async findByIdempotencyKey(key: string) {
@@ -79,6 +107,26 @@ export class D1LedgerRepository implements LedgerRepository {
       createdAt: text(row.createdAt),
     });
   }
+}
+
+function transactionsFromJoinedRows(rows: readonly Row[]): LedgerTransaction[] {
+  const grouped = new Map<string, LedgerTransaction>();
+  for (const row of rows) {
+    const id = text(row.id);
+    const existing = grouped.get(id);
+    const entry = { entryId: text(row.entryId), accountId: text(row.accountId), amountMinor: integer(row.amountMinor), currency: text(row.entryCurrency), ...(row.memo === null ? {} : { memo: text(row.memo) }) };
+    if (existing) {
+      (existing.entries as Array<typeof entry>).push(entry);
+      continue;
+    }
+    grouped.set(id, {
+      transactionId: id, idempotencyKey: text(row.idempotencyKey), inputFingerprint: text(row.inputFingerprint),
+      kind: text(row.kind) as LedgerTransaction["kind"], currency: text(row.currency), referenceId: text(row.referenceId), entries: [entry],
+      ...(row.splitVersion === null ? {} : { splitVersion: text(row.splitVersion) }),
+      ...(row.chainReference === null ? {} : { chainReference: text(row.chainReference) }), createdAt: text(row.createdAt),
+    });
+  }
+  return [...grouped.values()];
 }
 
 export class D1PaymentStateRepository implements PaymentStateRepository {
@@ -250,13 +298,14 @@ export class D1RefundApprovalRepository implements RefundApprovalRepository {
 
   async consumeApproval(approvalId: string, input: { accountId: string; campaignId: string; refundId: string }, now: Date): Promise<RefundApprovalRecord> {
     const current = await this.getApproval(approvalId);
-    if (!current || current.accountId !== input.accountId || current.campaignId !== input.campaignId || Date.parse(current.expiresAt) <= now.getTime()) {
+    if (!current || current.accountId !== input.accountId || current.campaignId !== input.campaignId) {
       throw new Error("Fresh server-issued refund approval is required");
     }
     if (current.consumedByRefundId) {
       if (current.consumedByRefundId !== input.refundId) throw new Error("Refund approval replay");
       return current;
     }
+    if (Date.parse(current.expiresAt) <= now.getTime()) throw new Error("Fresh server-issued refund approval is required");
     await this.#db.prepare(`UPDATE refund_approval_records SET consumed_by_refund_id = ?, consumed_at = ?
       WHERE id = ? AND consumed_by_refund_id IS NULL`).bind(input.refundId, now.toISOString(), approvalId).run();
     const consumed = await this.getApproval(approvalId);

@@ -2,7 +2,9 @@
 
 Ad Daddy uses Tempo transfer memos as opaque 32-byte commitments. Internal IDs, receiver IDs, campaign IDs, and placement IDs never appear in an onchain memo. The launch build targets Moderato testnet and keeps production funds disabled.
 
-Every deployed environment must set `AD_DADDY_ENV` explicitly. Provision `AD_DADDY_MEMO_SALT` and `AD_DADDY_PAYMENT_EVENT_SECRET` with `wrangler secret put <NAME> --env <environment>` before enabling payment routes. The latter authenticates signed envelopes from the private chain indexer; a caller-supplied operator header is always rejected. Use one high-entropy memo salt per environment and restore that same secret during rollback or disaster recovery; rotating it while queued payouts or refunds exist is prohibited because it would change their onchain idempotency memos.
+Every deployed environment must set `AD_DADDY_ENV` explicitly. Before enabling marketplace routes, provision `AD_DADDY_MEMO_SALT`, `AD_DADDY_PAYMENT_EVENT_SECRET`, `AD_DADDY_CAMPAIGN_TOKEN_SECRET`, `AD_DADDY_ACCOUNT_AGENT_TOKEN_SECRET`, `AD_DADDY_SPONSORSHIP_SIGNING_PRIVATE_KEY`, `AD_DADDY_SPONSORSHIP_SIGNING_KEY_ID`, `AD_DADDY_LAUNCH_POLICY_JSON`, and `AD_DADDY_OPERATOR_ACCOUNT_IDS` with `wrangler secret put <NAME> --env <environment>`. The payment-event secret authenticates signed envelopes from the private chain indexer; a caller-supplied operator header is always rejected. Use independent high-entropy token and memo secrets per environment. Restore the same memo salt during rollback or disaster recovery; rotating it while queued payouts or refunds exist is prohibited because it would change their onchain idempotency memos. The launch-policy document must validate for that exact environment, and settlement review requires two distinct human accounts from the operator allowlist.
+
+Before migration 0006, verify `SELECT (SELECT COUNT(*) FROM deposit_commitments) + (SELECT COUNT(*) FROM payout_records) + (SELECT COUNT(*) FROM refund_records) AS legacy_payment_rows;` returns `0`. The migration aborts before altering any table when legacy rows exist. Export and reconcile those rows before retrying; do not invent missing ledger or approval authority during a deploy.
 
 ## Daily proof
 
@@ -34,3 +36,7 @@ Keep the campaign hold active. Verify the allowlisted provider key, evidence ID,
 ## Campaign refund
 
 Close the campaign before computing withdrawable funds. Show funded, spent, reserved, held, and withdrawable amounts separately. After server-side WebAuthn and wallet-signature verification, issue one opaque, single-use approval ID bound to the account, campaign, refund address, exact amount, nonce, and expiry. The client submits only that approval ID; never accept caller-authored address, amount, or `recentAuthentication` assertions. Retry with the same refund ID and opaque memo until the onchain receipt is confirmed.
+
+## Settlement review
+
+A delivery that may have displayed but lacks completed settlement keeps its reservation in `settlement_review`. Never release it from a timer alone. One allowlisted human operator records either `settled` or `released`; a second distinct allowlisted operator must record the same decision before the service changes money or claim state. `settled` is allowed only when the durable verified display receipt exists. Conflicting or repeated self-approval does not resolve the review. Monitor the configured SLA and escalate overdue reviews without editing the ledger or reservation directly.

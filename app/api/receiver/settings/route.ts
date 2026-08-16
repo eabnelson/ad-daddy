@@ -1,5 +1,4 @@
 import {
-  MemoryLocalStore,
   RECEIVER_FIELD_KEYS,
   ReceiverSetupService,
   type LocalStore,
@@ -7,12 +6,15 @@ import {
   type ReceiverFieldSelection,
   type ReceiverFieldValues,
 } from "@ad-daddy/cli";
+import { D1ReceiverSettingsStore } from "../../../../lib/marketplace/receiver-settings.ts";
 
 const MAX_FORM_BYTES = 16_384;
 const TERMS_VERSION = "receiver-terms/2026-08-15";
 const PRIVACY_VERSION = "privacy/2026-08-15";
 const ALLOWED_FORM_KEYS = new Set([
   "intent", "cadenceMinutes", "quietHours", "coarseLocation", "projectNames",
+  "installationId",
+  "acceptDisclosure", "acceptTerms", "acceptPrivacy",
   "publicRepositoryUrls", "privateRepoTechStacks", "projectDescriptions", "maxAdsPerDay",
   "subscriptionTier", "tokenUsageRange", "totalSessionRange", "rewardType", "minimumTakeHomeMinor",
   ...RECEIVER_FIELD_KEYS.map((key) => `enabled.${key}`),
@@ -21,25 +23,23 @@ const ALLOWED_FORM_KEYS = new Set([
 export interface ReceiverSettingsRuntime {
   store: LocalStore;
   setup: ReceiverSetupService;
+  installationIdFor?: (accountId: string) => Promise<string | undefined>;
 }
 
-const store = new MemoryLocalStore();
-export const receiverSettingsRuntime: ReceiverSettingsRuntime = {
-  store,
-  setup: new ReceiverSetupService(store),
-};
-
-export function createReceiverSettingsHandler(runtime: ReceiverSettingsRuntime = receiverSettingsRuntime) {
+export function createReceiverSettingsHandler(runtime?: ReceiverSettingsRuntime) {
   return async function handle(request: Request): Promise<Response> {
+    const activeRuntime = runtime ?? await getReceiverSettingsRuntime();
     const accountId = request.headers.get("oai-authenticated-user-id");
     if (!accountId) return json(401, { error: "human_authentication_required" });
     const origin = request.headers.get("origin");
     if (request.method !== "GET" && origin && origin !== new URL(request.url).origin) return json(403, { error: "cross_origin_submission_rejected" });
-    const installationId = installationIdFor(accountId);
+    const requestedInstallationId = request.method === "GET" ? new URL(request.url).searchParams.get("installationId") : undefined;
+    const installationId = requestedInstallationId ?? await resolveInstallationId(activeRuntime, accountId);
+    if (!installationId) return json(404, { error: "enrolled_installation_required" });
 
     if (request.method === "GET") {
-      const config = await runtime.store.get(installationId);
-      return config
+      const config = await activeRuntime.store.get(installationId);
+      return config?.accountId === accountId
         ? json(200, { installationId, status: config.status, consentVersion: config.consentVersion, publishedFields: config.publishedFields })
         : json(404, { error: "receiver_configuration_not_found" });
     }
@@ -49,8 +49,10 @@ export function createReceiverSettingsHandler(runtime: ReceiverSettingsRuntime =
     catch (error) { return json(400, { error: "invalid_receiver_settings", message: boundedMessage(error) }); }
     const intent = form.get("intent");
     try {
-      if (intent === "preview") {
-        const config = await runtime.setup.prepare({
+      if (intent === "preview" || intent === "activate") {
+        const formInstallationId = optional(form.get("installationId"));
+        if (formInstallationId && formInstallationId !== installationId) throw new Error("Installation selection changed during submission");
+        const prepared = await activeRuntime.setup.prepare({
           installationId,
           accountId,
           role: "receiver",
@@ -60,23 +62,29 @@ export function createReceiverSettingsHandler(runtime: ReceiverSettingsRuntime =
           privacyVersion: PRIVACY_VERSION,
           hostDisclosure: { host: "Codex", consumesTurn: true },
         });
+        const config = intent === "activate" ? await activeRuntime.setup.activate({
+          installationId: prepared.installationId,
+          disclosureAccepted: form.get("acceptDisclosure") === "on",
+          termsAccepted: form.get("acceptTerms") === "on",
+          privacyAccepted: form.get("acceptPrivacy") === "on",
+        }) : prepared;
         return json(200, {
           intent,
           installationId,
           status: config.status,
           consentVersion: config.consentVersion,
           publishedFields: config.publishedFields,
-          activationDisclosure: config.activationDisclosure,
+          ...(intent === "preview" ? { activationDisclosure: prepared.activationDisclosure } : {}),
         });
       }
       if (intent === "pause") {
-        await requireOwnedConfiguration(runtime, installationId, accountId);
-        const config = await runtime.setup.pause(installationId);
+        await requireOwnedConfiguration(activeRuntime, installationId, accountId);
+        const config = await activeRuntime.setup.pause(installationId);
         return json(200, { intent, installationId, status: config.status, consentVersion: config.consentVersion });
       }
       if (intent === "revoke") {
-        await requireOwnedConfiguration(runtime, installationId, accountId);
-        const config = await runtime.setup.revoke(installationId);
+        await requireOwnedConfiguration(activeRuntime, installationId, accountId);
+        const config = await activeRuntime.setup.revoke(installationId);
         return json(200, { intent, installationId, status: config.status, consentVersion: config.consentVersion });
       }
       return json(400, { error: "unsupported_receiver_intent" });
@@ -125,8 +133,8 @@ function profileFrom(form: URLSearchParams): { values: ReceiverFieldValues; enab
   return { values, enabled };
 }
 
-function installationIdFor(accountId: string): string {
-  return `web:${accountId}`;
+async function resolveInstallationId(runtime: ReceiverSettingsRuntime, accountId: string): Promise<string | undefined> {
+  return runtime.installationIdFor ? runtime.installationIdFor(accountId) : `web:${accountId}`;
 }
 async function requireOwnedConfiguration(runtime: ReceiverSettingsRuntime, installationId: string, accountId: string): Promise<void> {
   const config = await runtime.store.get(installationId);
@@ -157,3 +165,13 @@ function put<K extends ReceiverFieldKey>(target: ReceiverFieldValues, key: K, va
 }
 function boundedMessage(error: unknown): string { return (error instanceof Error ? error.message : "Request rejected").slice(0, 240); }
 function json(status: number, body: unknown): Response { return Response.json(body, { status, headers: { "cache-control": "no-store" } }); }
+
+let deployedRuntime: ReceiverSettingsRuntime | undefined;
+async function getReceiverSettingsRuntime(): Promise<ReceiverSettingsRuntime> {
+  if (deployedRuntime) return deployedRuntime;
+  const { env } = await import("cloudflare:workers");
+  if (!env.DB) throw new Error("D1 receiver settings binding is required");
+  const store = new D1ReceiverSettingsStore(env.DB, { authority: "human_session" });
+  deployedRuntime = { store, setup: new ReceiverSetupService(store), installationIdFor: (accountId) => store.installationForAccount(accountId) };
+  return deployedRuntime;
+}

@@ -38,6 +38,39 @@ test("unsupported operating systems disclose manual-only delivery", () => {
     manualCommand: "ad-daddy check",
     message: "Automatic delivery is unavailable on linux; run ad-daddy check manually.",
   });
+  assert.deepEqual(schedulerSupport("darwin"), {
+    automaticDelivery: false,
+    manualCommand: "ad-daddy check",
+    message: "Automatic delivery is unavailable until this installation passes the macOS background capability probe; run ad-daddy check manually.",
+  });
+  assert.equal(schedulerSupport("darwin", true).automaticDelivery, true);
+});
+
+test("a concurrent pause cannot be overwritten by a finishing check", async () => {
+  const store = new MemoryLocalStore();
+  await store.put({
+    installationId: "installation_race", accountId: "account_1", role: "receiver",
+    profile: { values: {}, enabled: {} }, publishedFields: {}, cadenceMinutes: 60,
+    termsVersion: "terms/v1", privacyVersion: "privacy/v1", consentVersion: 1, status: "active",
+    hostDisclosure: { host: "Codex", consumesTurn: true },
+  });
+  await runManualCheck({
+    installationId: "installation_race",
+    store,
+    poll: async () => {
+      const paused = await store.get("installation_race");
+      assert.ok(paused);
+      paused.status = "paused";
+      paused.consentVersion = 2;
+      await store.put(paused);
+      return { status: "no_fill" };
+    },
+    now: new Date("2026-08-15T12:00:00.000Z"),
+  });
+  const current = await store.get("installation_race");
+  assert.equal(current?.status, "paused");
+  assert.equal(current?.consentVersion, 2);
+  assert.equal(current?.lastCheckedAt, undefined);
 });
 
 test("manual checks enforce the receiver's local daily frequency cap", async () => {

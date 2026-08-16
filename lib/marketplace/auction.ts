@@ -1,6 +1,9 @@
 import type { ConsentStatus, RewardType } from "../domain/types.ts";
 import { rankEligibleBids, validateAndPriceBid, type AuctionBid, type RankedAuctionBid } from "./ranking.ts";
 import { KeyedSerialExecutor } from "../runtime/keyed-serial.ts";
+import { BudgetUnavailableError } from "./budget-error.ts";
+
+export { BudgetUnavailableError } from "./budget-error.ts";
 
 export type AuctionNoFillReason =
   | "no_eligible_bids"
@@ -56,6 +59,7 @@ export interface AuctionClearance {
   receiverStatus: ConsentStatus;
   currentConsentVersion: number;
   frequencyEligible?: boolean;
+  eligibleCampaignIds?: readonly string[];
 }
 
 const MAX_AUCTION_BIDS = 100;
@@ -125,20 +129,25 @@ export class AuctionService {
       if (record.decision) return record.decision;
       const closesAt = Date.parse(record.definition.closesAt);
       if (input.now.getTime() < closesAt) throw new Error("Auction deadline has not arrived");
-      const ranked = rankEligibleBids([...record.bids.values()]);
+      const eligibleCampaignIds = input.eligibleCampaignIds && new Set(input.eligibleCampaignIds);
+      const ranked = rankEligibleBids([...record.bids.values()].filter((bid) => !eligibleCampaignIds || eligibleCampaignIds.has(bid.campaignId)));
       const noFillReason = receiverNoFillReason(record.definition, input);
       if (noFillReason) return this.decide(record, input.now, ranked.length, undefined, noFillReason);
       if (ranked.length === 0) return this.decide(record, input.now, 0, undefined, "no_eligible_bids");
 
       for (const bid of ranked) {
         if (record.definition.rewardLane !== "stablecoin") {
-          return this.decide(record, input.now, ranked.length, bid);
+          return this.decide(record, input.now, ranked.length, Object.freeze({
+            ...bid,
+            reservationId: `offer:${record.definition.auctionId}:${bid.bidId}`,
+          }));
         }
         const reservationId = `auction:${record.definition.auctionId}:bid:${bid.bidId}`;
         try {
           await this.#budgets.reserve(bid.campaignId, reservationId, bid.grossMinor, input.now);
           return this.decide(record, input.now, ranked.length, Object.freeze({ ...bid, reservationId }));
-        } catch {
+        } catch (error) {
+          if (!(error instanceof BudgetUnavailableError)) throw error;
           // The next ranked bid may still have an available, independently
           // bounded campaign balance. Reservation failures reveal no balance.
         }

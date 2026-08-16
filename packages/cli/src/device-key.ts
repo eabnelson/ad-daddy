@@ -3,8 +3,18 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+import {
+  canonicalDeviceProofEnvelope,
+  normalizeDeviceProofTarget,
+  sha256DeviceProofBody,
+  type AdDaddyEnvironment,
+  type DeviceProofEnvelope,
+} from "@ad-daddy/host-adapters";
+
 const execFile = promisify(execFileCallback);
 const REFERENCE_PATTERN = /^[A-Za-z0-9_:-]{1,512}$/;
+
+export type { AdDaddyEnvironment, DeviceProofEnvelope } from "@ad-daddy/host-adapters";
 
 export interface DeviceCredential {
   credentialReference: string;
@@ -20,6 +30,54 @@ export interface DeviceKeyProvider {
   createOrLoad(installationId: string): Promise<DeviceCredential>;
   sign(credentialReference: string, payload: Uint8Array): Promise<Uint8Array>;
   assertProductionEnrollment(): void;
+}
+
+export async function createDeviceProofHeader(input: {
+  provider: DeviceKeyProvider;
+  credentialReference: string;
+  installationId: string;
+  consentVersion: number;
+  keyThumbprint: string;
+  environment: AdDaddyEnvironment;
+  method: string;
+  target: string;
+  body: string;
+  now?: Date;
+}): Promise<string> {
+  const now = input.now ?? new Date();
+  const method = input.method.toUpperCase();
+  const target = normalizeDeviceProofTarget(input.target);
+  if (!new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]).has(method)) throw new Error("Device proof method is unsupported");
+  assertInstallationId(input.installationId);
+  if (!Number.isSafeInteger(input.consentVersion) || input.consentVersion < 1 || !/^[A-Za-z0-9_-]{43}$/.test(input.keyThumbprint)) {
+    throw new Error("Device proof identity is invalid");
+  }
+  const envelope: DeviceProofEnvelope = {
+    method,
+    target,
+    audience: `ad-daddy:${input.environment}`,
+    bodyDigest: await sha256DeviceProofBody(input.body),
+    installationId: input.installationId,
+    consentVersion: input.consentVersion,
+    keyThumbprint: input.keyThumbprint,
+    nonce: encodeBase64Url(crypto.getRandomValues(new Uint8Array(18))),
+    issuedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 60_000).toISOString(),
+  };
+  const signature = await input.provider.sign(input.credentialReference, new TextEncoder().encode(canonicalDeviceProofEnvelope(envelope)));
+  return Buffer.from(JSON.stringify({ envelope, signature: encodeBase64Url(signature) })).toString("base64url");
+}
+
+export async function signCanonicalPayload(
+  provider: DeviceKeyProvider,
+  credentialReference: string,
+  canonicalPayload: string,
+): Promise<string> {
+  return encodeBase64Url(await provider.sign(credentialReference, new TextEncoder().encode(canonicalPayload)));
+}
+
+export function canonicalDeviceProof(envelope: DeviceProofEnvelope): string {
+  return canonicalDeviceProofEnvelope(envelope);
 }
 
 export class InMemoryDeviceKeyProvider implements DeviceKeyProvider {

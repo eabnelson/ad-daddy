@@ -51,7 +51,8 @@ export type CodexDeliveryFailureCode =
   | "OUTPUT_BUDGET_EXCEEDED"
   | "TURN_FAILED"
   | "EXISTING_TURN_INCOMPLETE"
-  | "DISPLAY_OUTPUT_INVALID";
+  | "DISPLAY_OUTPUT_INVALID"
+  | "BUILT_IN_TOOLS_UNVERIFIED";
 
 export interface CodexDeliveryReceipt {
   placementId: string;
@@ -102,6 +103,8 @@ export interface CodexAppServerConnection {
   cliVersion: string;
   userAgent: string | null;
   allowedInstructionSources?: string[];
+  /** Set only by a host adapter that can prove all built-in tools are unavailable. */
+  builtInToolsDisabled?: boolean;
   request<T = unknown>(method: string, params: unknown): Promise<T>;
   nextNotification(options?: { signal?: AbortSignal }): Promise<AppServerNotification>;
   close(): Promise<void>;
@@ -121,6 +124,7 @@ export interface DeliverCodexPlacementOptions {
   model?: string;
   timeoutMs?: number;
   outputCharacterBudget?: number;
+  deploymentEnvironment?: "development" | "test" | "staging" | "production";
   existingHostIdentifiers?: {
     threadId: string;
     turnId?: string;
@@ -200,6 +204,13 @@ export async function deliverCodexPlacement(
       error instanceof Error ? error.message : "Codex App Server is unavailable.",
     );
   }
+  if (options.deploymentEnvironment === "production" && connection.builtInToolsDisabled !== true) {
+    await connection.close();
+    return failure(
+      "BUILT_IN_TOOLS_UNVERIFIED",
+      "Production native delivery requires host-provided proof that every built-in tool is disabled.",
+    );
+  }
 
   const title = `Sponsored · ${payload.title}`;
   let thread: ThreadRecord | null = null;
@@ -220,6 +231,17 @@ export async function deliverCodexPlacement(
     if (thread) {
       const existing = thread;
       const turns = existing.turns ?? [];
+      if (turns[0]?.id) {
+        // A restarted client may have persisted the task ID just before the
+        // host accepted a display turn. Persist the recovered turn ID before
+        // any later validation failure so the caller cannot open a fallback
+        // surface for content that may already be visible.
+        await options.onHostIdentifiers?.({
+          placementId: payload.placementId,
+          threadId: existing.id,
+          turnId: turns[0].id,
+        });
+      }
       if (turns.length === 0) {
         if (!options.existingHostIdentifiers?.instructionSourcesVerified) {
           return failure(

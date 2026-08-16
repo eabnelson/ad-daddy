@@ -37,7 +37,7 @@ export function createPaymentCore(bindings: PaymentBindings) {
   const stateRepository = new D1PaymentStateRepository(bindings.DB, policy.policyVersion);
   const refundApprovalRepository = new D1RefundApprovalRepository(bindings.DB);
   return Object.freeze({
-    policy, memoSalt, ledgerRepository, ledger, stateRepository, refundApprovalRepository,
+    db: bindings.DB, policy, memoSalt, ledgerRepository, ledger, stateRepository, refundApprovalRepository,
     deposits: new DepositService(ledger, policy, `0x${"1".repeat(40)}`, stateRepository),
     operatorEvents: new OperatorEventEnvelopeService(operatorSecret),
   });

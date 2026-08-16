@@ -6,6 +6,10 @@ For a receiver, collect the privacy selections in `privacy.md`, accepted rewards
 
 For an advertiser, collect a verified brand, funded budget, schedule, audience rules, offer, maximum bid, conversion evidence, creative, and per-person frequency. The agent may prepare this configuration but a human must approve identity, funding, limits, destinations, and production activation.
 
+When the hosted product is available, the authenticated human may issue a scoped account-agent token from `/api/v1/account-agent-token`. Keep it to the minimum scopes needed and no more than 15 minutes, then pass it to the CLI with `--token` or `AD_DADDY_API_TOKEN`. Use `campaign:manage` for campaign preparation, `placement:read` to inspect a placement, `placement:act` to hide, block, or report, and `report:read` for campaign reporting. Never put the token in a skill file, prompt, repository, or shell history.
+
 If advertiser endpoints are unavailable, stop at a local campaign draft and defer activation to the advertiser marketplace setup. Never claim it is funded or bidding.
 
-After activation, explain `profile`, `check`, `pause`, and `uninstall`. macOS automatic delivery is allowed only after the CLI previews and verifies its approved launchd job. All other systems remain manual-only until their scheduler lifecycle is supported.
+For a receiver, run `ad-daddy enroll prepare` after the local draft. Have the authenticated human issue a grant for the exact displayed installation ID and key thumbprint, then pass only that short-lived token to `ad-daddy enroll complete`. Never copy or request the device private key; the CLI stores only its Keychain reference.
+
+After activation, explain `profile`, `check`, `pause`, and `uninstall`. Manual `ad-daddy check` is the only MVP delivery mode on every platform. Do not install or advertise automatic background delivery.

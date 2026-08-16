@@ -32,6 +32,17 @@ CREATE TABLE `refund_human_proofs` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `refund_human_proof_nonce_unique` ON `refund_human_proofs` (`nonce`);--> statement-breakpoint
+CREATE TABLE `__ad_daddy_0006_empty_table_preflight` (
+	`ok` integer NOT NULL,
+	CONSTRAINT "payment_tables_must_be_empty_before_0006" CHECK (`ok` = 1)
+);--> statement-breakpoint
+INSERT INTO `__ad_daddy_0006_empty_table_preflight` (`ok`)
+SELECT CASE WHEN
+	(SELECT COUNT(*) FROM `deposit_commitments`) = 0 AND
+	(SELECT COUNT(*) FROM `payout_records`) = 0 AND
+	(SELECT COUNT(*) FROM `refund_records`) = 0
+THEN 1 ELSE 0 END;--> statement-breakpoint
+DROP TABLE `__ad_daddy_0006_empty_table_preflight`;--> statement-breakpoint
 ALTER TABLE `deposit_commitments` ADD `advertiser_ledger_account_id` text NOT NULL;--> statement-breakpoint
 ALTER TABLE `deposit_commitments` ADD `treasury_ledger_account_id` text NOT NULL;--> statement-breakpoint
 ALTER TABLE `payout_records` ADD `receiver_ledger_account_id` text NOT NULL;--> statement-breakpoint

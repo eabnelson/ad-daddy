@@ -46,6 +46,10 @@ export default async function ReceiverSettingsPage() {
         </fieldset>
         <div className="settings-actions">
           <button type="submit" name="intent" value="preview">Preview exact snapshot</button>
+          <label><input type="checkbox" name="acceptDisclosure" /> I accept the sponsored display-turn disclosure.</label>
+          <label><input type="checkbox" name="acceptTerms" /> I accept the receiver terms.</label>
+          <label><input type="checkbox" name="acceptPrivacy" /> I accept the privacy contract.</label>
+          <button type="submit" name="intent" value="activate">Save and activate</button>
           <button type="submit" name="intent" value="pause">Pause immediately</button>
           <button type="submit" name="intent" value="revoke">Revoke</button>
         </div>

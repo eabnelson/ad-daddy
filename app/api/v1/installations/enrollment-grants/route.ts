@@ -2,25 +2,39 @@ import {
   D1DeviceEnrollmentRepository,
   DurableDeviceEnrollmentService,
 } from "../../../../../lib/auth/device-enrollment.ts";
-import type { HumanApproval } from "../../../../../lib/domain/types.ts";
+import {
+  approvalResourceFingerprint,
+  D1ApprovalCapabilityRepository,
+  type ApprovalCapabilityRepository,
+} from "../../../../../lib/auth/approval-capability.ts";
 
 type Clock = () => Date;
 
-export function createEnrollmentGrantHandler(service?: DurableDeviceEnrollmentService, clock: Clock = () => new Date()) {
+export function createEnrollmentGrantHandler(service?: DurableDeviceEnrollmentService, clock: Clock = () => new Date(), approvals?: ApprovalCapabilityRepository) {
   return async function handle(request: Request): Promise<Response> {
     const accountId = request.headers.get("oai-authenticated-user-id");
     if (!accountId) return Response.json({ error: "human_authentication_required" }, { status: 401 });
     try {
       const body = await boundedJson(request) as Record<string, unknown>;
-      if (typeof body.installationId !== "string" || typeof body.keyThumbprint !== "string" || !isRecord(body.approval)) {
+      if (typeof body.installationId !== "string" || typeof body.keyThumbprint !== "string" || typeof body.approvalId !== "string") {
         return Response.json({ error: "invalid_enrollment_grant_request" }, { status: 400 });
       }
-      const grant = await (service ?? await deployedService()).issueGrant({
+      const now = clock();
+      const deployed = service && approvals ? undefined : await deployedServices();
+      const approval = await (approvals ?? deployed!.approvals).consume({
+        approvalId: body.approvalId,
+        accountId,
+        purpose: "device_enroll",
+        resourceFingerprint: approvalResourceFingerprint({ installationId: body.installationId, keyThumbprint: body.keyThumbprint }),
+        useId: `device-enroll:${body.installationId}:${body.keyThumbprint}`,
+        now,
+      });
+      const grant = await (service ?? deployed!.enrollment).issueGrant({
         accountId,
         installationId: body.installationId,
         keyThumbprint: body.keyThumbprint,
-        approval: body.approval as unknown as HumanApproval,
-        now: clock(),
+        approval: { accountId, approvedAt: approval.approvedAt, expiresAt: approval.expiresAt, purposes: ["device_enroll"] },
+        now,
       });
       return Response.json(grant, { status: 201, headers: { "cache-control": "no-store" } });
     } catch (error) {
@@ -31,12 +45,15 @@ export function createEnrollmentGrantHandler(service?: DurableDeviceEnrollmentSe
 
 export const POST = createEnrollmentGrantHandler();
 
-let cached: DurableDeviceEnrollmentService | undefined;
-async function deployedService() {
+let cached: { enrollment: DurableDeviceEnrollmentService; approvals: ApprovalCapabilityRepository } | undefined;
+async function deployedServices() {
   if (cached) return cached;
   const { env } = await import("cloudflare:workers");
   if (!env.DB) throw new Error("D1 enrollment binding is required");
-  cached = new DurableDeviceEnrollmentService(new D1DeviceEnrollmentRepository(env.DB));
+  cached = {
+    enrollment: new DurableDeviceEnrollmentService(new D1DeviceEnrollmentRepository(env.DB)),
+    approvals: new D1ApprovalCapabilityRepository(env.DB),
+  };
   return cached;
 }
 
@@ -52,8 +69,4 @@ async function boundedJson(request: Request): Promise<unknown> {
 
 function boundedMessage(error: unknown) {
   return (error instanceof Error ? error.message : "Enrollment grant rejected").slice(0, 200);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

@@ -1,9 +1,10 @@
-import { placementDeliveryRepository } from "../../../lib/marketplace/placement-registry.ts";
+import { getPlacementDeliveryRepository } from "../../../lib/marketplace/placement-registry.ts";
 
 export default async function CreativePage({ params }: { params: Promise<{ placementId: string }> }) {
   const { placementId } = await params;
+  const repository = await getPlacementDeliveryRepository();
   const record = placementId.length <= 128
-    ? await placementDeliveryRepository.get(placementId)
+    ? await repository.get(placementId)
     : undefined;
   if (!record) {
     return <CreativeState status="expired" title="This sponsored placement is unavailable." />;

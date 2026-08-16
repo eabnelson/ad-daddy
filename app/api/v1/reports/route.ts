@@ -1,7 +1,13 @@
-import { placementDeliveryRepository } from "../../../../lib/marketplace/placement-registry.ts";
-import type { PlacementDeliveryRepository } from "../../../../lib/marketplace/placement-delivery.ts";
+import { getPlacementDeliveryRepository } from "../../../../lib/marketplace/placement-registry.ts";
+import {
+  PlacementPaginationError,
+  assertPageInput,
+  type PlacementDeliveryRepository,
+  type PlacementPageInput,
+} from "../../../../lib/marketplace/placement-delivery.ts";
 import { lifecycleEvents, type LifecycleEventStore } from "../../../../lib/observability/events.ts";
-import { campaignRuntime } from "../../../../lib/marketplace/campaign-registry.ts";
+import { getCampaignRuntime } from "../../../../lib/marketplace/campaign-registry.ts";
+import { authenticateAccountRequest } from "../../../../lib/auth/account-agent-token.ts";
 
 interface ReportCampaignSource {
   campaigns: {
@@ -25,16 +31,17 @@ export interface CampaignReportAuthority {
 }
 
 export function createCampaignReportAuthority(
-  source: ReportCampaignSource = campaignRuntime,
+  source?: ReportCampaignSource,
   operatorAccountIds: readonly string[] = operatorAccountsFromEnvironment(),
 ): CampaignReportAuthority {
   const operators = new Set(operatorAccountIds.filter(Boolean));
   return Object.freeze({
     async canReadCampaign(accountId: string, campaignId: string) {
       try {
-        const campaign = await source.campaigns.get(campaignId);
+        const activeSource = source ?? await getCampaignRuntime();
+        const campaign = await activeSource.campaigns.get(campaignId);
         if (campaign.accountId !== accountId) return false;
-        const verification = await source.brandVerifications.get(campaign.brand.verificationId);
+        const verification = await activeSource.brandVerifications.get(campaign.brand.verificationId);
         return verification?.status === "active" &&
           verification.accountId === accountId &&
           verification.verifiedDomain.toLowerCase() === campaign.brand.verifiedDomain.toLowerCase();
@@ -47,12 +54,13 @@ export function createCampaignReportAuthority(
 }
 
 export function createReportHandler(
-  repository: PlacementDeliveryRepository = placementDeliveryRepository,
+  repository?: PlacementDeliveryRepository,
   events: LifecycleEventStore = lifecycleEvents,
   authority: CampaignReportAuthority = createCampaignReportAuthority(),
 ) {
   return async function handle(request: Request): Promise<Response> {
-    const accountId = request.headers.get("oai-authenticated-user-id");
+    const activeRepository = repository ?? await getPlacementDeliveryRepository();
+    const accountId = await authenticateAccountRequest(request, "report:read");
     if (!accountId) return Response.json({ error: "human_authentication_required" }, { status: 401 });
     const campaignId = new URL(request.url).searchParams.get("campaignId");
     if (!campaignId) {
@@ -63,14 +71,19 @@ export function createReportHandler(
     if (!await authority.canReadCampaign(accountId, campaignId)) {
       return Response.json({ error: "campaign_not_found" }, { status: 404 });
     }
-    const placements = await repository.listByCampaign(campaignId);
-    return Response.json({ placements: placements.map((record) => ({
-      placementId: record.placementId, campaignId: record.marketContext?.campaignId ?? null,
-      status: record.status, spendMinor: record.marketContext?.grossAmountMinor ?? 0,
-      renderedResponse: record.receipt && "output" in record.receipt ? record.receipt.output : null,
-      receiptStatus: record.receipt ? "verified" : "unavailable",
-      measurement: { sessionCreated: record.receipt ? "verified" : "unavailable", sessionOpen: "unavailable", creativeEngagement: "unavailable", conversion: "unavailable" },
-    })) });
+    try {
+      const page = await activeRepository.listByCampaign(campaignId, placementPageInput(request));
+      return Response.json({ placements: page.placements.map((record) => ({
+        placementId: record.placementId, campaignId: record.marketContext?.campaignId ?? null,
+        status: record.status, spendMinor: record.marketContext?.grossAmountMinor ?? 0,
+        renderedResponse: record.receipt && "output" in record.receipt ? record.receipt.output : null,
+        receiptStatus: record.receipt ? "verified" : "unavailable",
+        measurement: { sessionCreated: record.receipt ? "verified" : "unavailable", sessionOpen: "unavailable", creativeEngagement: "unavailable", conversion: "unavailable" },
+      })), nextCursor: page.nextCursor });
+    } catch (error) {
+      if (error instanceof PlacementPaginationError) return Response.json({ error: "invalid_pagination" }, { status: 400 });
+      throw error;
+    }
   };
 }
 export const GET = createReportHandler();
@@ -80,4 +93,14 @@ function operatorAccountsFromEnvironment(): readonly string[] {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+}
+
+function placementPageInput(request: Request): PlacementPageInput {
+  const url = new URL(request.url);
+  const input = {
+    limit: Number(url.searchParams.get("limit") ?? 50),
+    ...(url.searchParams.has("cursor") ? { cursor: url.searchParams.get("cursor") ?? "" } : {}),
+  };
+  assertPageInput(input);
+  return input;
 }

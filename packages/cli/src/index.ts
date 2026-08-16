@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 
-import { execFile as execFileCallback } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -17,13 +15,15 @@ import {
 import { prepareAdvertiserSetup } from "./commands/advertiser.js";
 import { runManualCheck } from "./commands/check.js";
 import { ADVERTISER_TERMS_VERSION } from "./commands/campaign.js";
+import type { ReceiverFieldSelection } from "./commands/profile.js";
 import { ReceiverSetupService, type SetupInput } from "./commands/setup.js";
+import { MacOSDeviceKeyProvider, type AdDaddyEnvironment, type DeviceKeyProvider } from "./device-key.js";
 import { JsonLocalStore, type LocalInstallationConfig, type SetupRole } from "./local-store.js";
-import { LaunchdScheduler, type LaunchdHost } from "./schedulers/launchd.js";
+import { fetchReceiverProfile, publishReceiverProfile } from "./receiver-profile.js";
+import { JsonSponsorshipPullStateStore, SponsorshipPullClient } from "./sponsorship-pull.js";
 
 export const CLI_VERSION = "0.1.0";
 const MAX_INPUT_BYTES = 131_072;
-const execFile = promisify(execFileCallback);
 
 export * from "./commands/check.js";
 export * from "./commands/advertiser.js";
@@ -36,18 +36,22 @@ export * from "./device-key.js";
 export * from "./local-store.js";
 export * from "./scheduler.js";
 export * from "./schedulers/launchd.js";
+export * from "./sponsorship-pull.js";
 
 export function usage(): string {
   return [
     `Ad Daddy CLI ${CLI_VERSION}`,
     "setup      choose receiver, advertiser, or both and preview configuration",
-    "profile    show the exact outbound receiver snapshot",
+    "profile    show, publish, or sync the receiver snapshot",
+    "enroll     prepare or complete receiver device enrollment",
     "check      run one policy-gated manual ad check",
     "advertiser verify a brand and prepare agent campaign access",
-    "campaign   prepare, fund, approve, pause, or close a bounded campaign",
+    "campaign   prepare, fund, approve, pause, close, or issue a bounded agent token",
     "search     retrieve rotating eligible opportunities for one campaign",
+    "bid        submit one bounded campaign-agent bid",
+    "placement  read, hide, block, or report one sponsored placement",
     "pause      stop checking before consent revocation",
-    "uninstall  remove the scheduler before revoking the installation",
+    "uninstall  revoke the local installation",
   ].join("\n");
 }
 
@@ -59,6 +63,7 @@ export interface CliDependencies {
   platform?: NodeJS.Platform;
   homeDirectory?: string;
   executablePath?: string;
+  deviceKeyProvider?: DeviceKeyProvider;
 }
 
 /** Runs one command and always emits a single JSON document. */
@@ -74,8 +79,10 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
       return 0;
     }
     const store = new JsonLocalStore(flags.values.get("config") ?? env.AD_DADDY_CONFIG_PATH ?? join(dependencies.homeDirectory ?? homedir(), ".ad-daddy", "config.json"));
-    const scheduler = makeScheduler(flags, dependencies, env);
-    const setup = new ReceiverSetupService(store, { stopScheduler: scheduler ? (id) => scheduler.pause(id) : undefined });
+    if (flags.values.has("scheduler") || env.AD_DADDY_SCHEDULER) {
+      throw new Error("Automatic background delivery is unavailable in this MVP; use ad-daddy check");
+    }
+    const setup = new ReceiverSetupService(store);
     let result: unknown;
 
     if (command === "setup") {
@@ -92,61 +99,151 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
             termsAccepted: flags.boolean.has("accept-terms"),
             privacyAccepted: flags.boolean.has("accept-privacy"),
           });
-          if (scheduler) await scheduler.install({ installationId: activated.installationId, cadenceMinutes: activated.cadenceMinutes });
           result = activated;
         } else result = prepared;
       }
     } else if (command === "profile") {
       const config = await oneInstallation(store, flags);
-      result = { installationId: config.installationId, consentVersion: config.consentVersion, status: config.status, publishedFields: config.publishedFields };
+      const operation = flags.positionals[0] ?? "show";
+      if (operation === "show") result = { installationId: config.installationId, consentVersion: config.consentVersion, status: config.status, publishedFields: config.publishedFields };
+      else if (operation === "publish") result = await publishConfig(config, flags, dependencies, env);
+      else if (operation === "sync") result = await syncConfig(config, store, flags, dependencies, env);
+      else throw new Error("profile requires show, publish, or sync");
     } else if (command === "check") {
-      const config = await oneInstallation(store, flags);
-      const pollUrl = flags.values.get("poll-url") ?? env.AD_DADDY_POLL_URL;
-      if (!pollUrl) throw new Error("check requires --poll-url or AD_DADDY_POLL_URL");
+      let config = await oneInstallation(store, flags);
+      if (config.deviceCredential && (flags.values.get("api-url") ?? env.AD_DADDY_API_URL)) {
+        config = await syncConfig(config, store, flags, dependencies, env);
+      }
       const delivery = config.status === "active"
         ? await createLocalDeliveryRuntime(config, flags, dependencies, env)
         : undefined;
-      result = await runManualCheck({
-        installationId: config.installationId,
-        store,
-        poll: async (publishedFields) => requestJson(pollUrl, {
+      if (config.deviceCredential) {
+        if (!delivery) throw new Error("Active local delivery capability is required before fetching sponsorship inventory");
+        const apiBaseUrl = flags.values.get("api-url") ?? env.AD_DADDY_API_URL;
+        if (!apiBaseUrl) throw new Error("check requires --api-url or AD_DADDY_API_URL");
+        const marketplacePublicKeyPem = flags.values.get("marketplace-public-key") ?? env.AD_DADDY_MARKETPLACE_PUBLIC_KEY_PEM;
+        if (!marketplacePublicKeyPem) throw new Error("check requires the pinned AD_DADDY_MARKETPLACE_PUBLIC_KEY_PEM");
+        const localRoot = flags.values.get("local-root") ?? env.AD_DADDY_LOCAL_ROOT ?? join(dependencies.homeDirectory ?? homedir(), ".ad-daddy");
+        const pull = new SponsorshipPullClient({
+          identity: sponsorshipIdentity(config),
+          environment: adDaddyEnvironment(env),
+          provider: dependencies.deviceKeyProvider ?? new MacOSDeviceKeyProvider({ platform: dependencies.platform }),
+          marketplacePublicKeyPem,
+          apiBaseUrl,
+          fetch: dependencies.fetch,
+          state: new JsonSponsorshipPullStateStore(flags.values.get("pull-state") ?? env.AD_DADDY_PULL_STATE_PATH ?? join(localRoot, "sponsorship-pull.json")),
+          delivery,
+          readCurrentIdentity: async () => {
+            const current = await store.get(config.installationId);
+            return current?.deviceCredential ? { ...sponsorshipIdentity(current), status: current.status } : undefined;
+          },
+          adapterVersion: `ad-daddy-cli/${CLI_VERSION}`,
+        });
+        result = await runManualCheck({ installationId: config.installationId, store, poll: (_publishedFields, now) => pull.check(now) });
+      } else {
+        const pollUrl = flags.values.get("poll-url") ?? env.AD_DADDY_POLL_URL;
+        if (!pollUrl) throw new Error("check requires an enrolled device or the explicit legacy poll URL");
+        result = await runManualCheck({
           installationId: config.installationId,
-          consentVersion: config.consentVersion,
-          publishedFields,
-        }, flags, dependencies, env),
-        delivery,
-      });
+          store,
+          poll: async (publishedFields) => requestJson(pollUrl, {
+            installationId: config.installationId,
+            consentVersion: config.consentVersion,
+            publishedFields,
+          }, flags, dependencies, env),
+          delivery,
+        });
+      }
+    } else if (command === "enroll") {
+      const operation = flags.positionals[0];
+      if (!operation || !["prepare", "complete"].includes(operation)) throw new Error("enroll requires prepare or complete");
+      const config = await oneInstallation(store, flags);
+      const provider = dependencies.deviceKeyProvider ?? new MacOSDeviceKeyProvider({ platform: dependencies.platform });
+      provider.assertProductionEnrollment();
+      const credential = await provider.createOrLoad(config.installationId);
+      if (operation === "prepare") {
+        result = {
+          installationId: config.installationId,
+          accountId: config.accountId,
+          keyThumbprint: credential.keyThumbprint,
+          algorithm: credential.algorithm,
+          next: "Have the authenticated human approve this installation and issue an enrollment grant for the exact thumbprint, then run enroll complete.",
+        };
+      } else {
+        const input = requireRecord(await readJsonInput(flags), "device enrollment");
+        const grantToken = stringProperty(input, "grantToken");
+        if (!grantToken) throw new Error("enroll complete requires grantToken");
+        const enrolled = await requestJson(apiUrl(flags, env, "/api/v1/installations/enroll"), {
+          grantToken,
+          installationId: config.installationId,
+          hostKind: config.hostDisclosure.host.toLowerCase(),
+          algorithm: credential.algorithm,
+          keyVersion: credential.keyVersion,
+          publicJwk: credential.publicJwk,
+          keyThumbprint: credential.keyThumbprint,
+        }, flags, dependencies, env);
+        const attached = await setup.attachDeviceCredential(config.installationId, credential);
+        const published = attached.status === "active" ? await publishConfig(attached, flags, dependencies, env) : undefined;
+        result = { enrolled, installationId: attached.installationId, deviceCredential: attached.deviceCredential, ...(published ? { published } : {}) };
+      }
     } else if (command === "advertiser") {
       const input = flags.values.has("input") || flags.values.has("json") ? await readJsonInput(flags) : {};
       const role = stringProperty(input, "role") ?? flags.values.get("role") ?? "advertiser";
       result = prepareAdvertiserSetup(role as SetupRole);
     } else if (command === "campaign") {
       const operation = flags.positionals[0];
-      if (!operation || !["prepare", "fund", "approve", "activate", "pause", "close"].includes(operation)) throw new Error("campaign requires prepare, fund, approve, activate, pause, or close");
+      if (!operation || !["prepare", "fund", "approve", "activate", "pause", "close", "token"].includes(operation)) throw new Error("campaign requires prepare, fund, approve, activate, pause, close, or token");
       const input = await readJsonInput(flags);
-      const action = operation === "approve" ? "activate" : operation;
+      const action = operation === "approve" ? "activate" : operation === "token" ? "issue_agent_token" : operation;
       let payload: Record<string, unknown>;
       if (action === "prepare") {
         const campaign = recordProperty(input, "campaign") ?? requireRecord(input, "campaign draft");
         payload = { action, campaign: { ...campaign, advertiserTermsVersion: ADVERTISER_TERMS_VERSION } };
+      } else if (action === "issue_agent_token") {
+        const record = requireRecord(input, "campaign token");
+        const campaignId = flags.values.get("campaign") ?? stringProperty(record, "campaignId");
+        if (!campaignId) throw new Error("campaign token requires --campaign or campaignId in the input");
+        payload = { action, campaignId, token: recordProperty(record, "token") ?? record };
       } else {
         const campaignId = flags.values.get("campaign") ?? stringProperty(input, "campaignId");
         if (!campaignId) throw new Error("campaign operation requires --campaign or campaignId in the input");
         payload = { action, campaignId };
-        const approval = recordProperty(input, "approval");
-        if (approval) payload.approval = approval;
+        const approvalId = stringProperty(input, "approvalId");
+        if (approvalId) payload.approvalId = approvalId;
       }
       result = await requestJson(apiUrl(flags, env, "/api/v1/campaigns"), payload, flags, dependencies, env);
     } else if (command === "search") {
       const input = requireRecord(await readJsonInput(flags), "opportunity search");
       result = await requestJson(apiUrl(flags, env, "/api/v1/opportunities"), input, flags, dependencies, env);
+    } else if (command === "bid") {
+      const input = requireRecord(await readJsonInput(flags), "campaign bid");
+      const auctionId = stringProperty(input, "auctionId");
+      if (!auctionId || !/^[A-Za-z0-9:_-]{1,128}$/.test(auctionId)) throw new Error("bid requires a bounded auctionId");
+      const bid = recordProperty(input, "bid");
+      if (!bid) throw new Error("bid requires a bid object");
+      result = await requestJson(apiUrl(flags, env, `/api/v1/auctions/${encodeURIComponent(auctionId)}/bids`), {
+        accountId: stringProperty(input, "accountId"), campaignId: stringProperty(input, "campaignId"), bid,
+      }, flags, dependencies, env);
+    } else if (command === "placement") {
+      const placementId = flags.values.get("placement");
+      const action = flags.values.get("action") ?? "read";
+      if (!placementId || !/^[A-Za-z0-9:_-]{1,128}$/.test(placementId)) throw new Error("placement requires --placement <id>");
+      if (!["read", "hide", "block_advertiser", "report"].includes(action)) throw new Error("placement --action must be read, hide, block_advertiser, or report");
+      if (["block_advertiser", "report"].includes(action) && !flags.boolean.has("confirm")) throw new Error(`${action} requires --confirm`);
+      const url = apiUrl(flags, env, `/api/v1/placements/${encodeURIComponent(placementId)}/receipt`);
+      result = action === "read"
+        ? await requestApiJson(url, "GET", undefined, flags, dependencies, env)
+        : await requestApiJson(url, "POST", { action }, flags, dependencies, env);
     } else if (command === "pause") {
       const config = await oneInstallation(store, flags);
-      result = await setup.pause(config.installationId);
+      const paused = await setup.pause(config.installationId);
+      const published = paused.deviceCredential ? await publishConfig(paused, flags, dependencies, env) : undefined;
+      result = published ? { ...paused, published } : paused;
     } else if (command === "uninstall") {
       const config = await oneInstallation(store, flags);
-      if (scheduler) await scheduler.uninstall(config.installationId);
-      result = await setup.revoke(config.installationId);
+      const revoked = await setup.revoke(config.installationId);
+      const published = revoked.deviceCredential ? await publishConfig(revoked, flags, dependencies, env) : undefined;
+      result = published ? { ...revoked, published } : revoked;
     } else {
       throw new Error(`Unknown command: ${command}`);
     }
@@ -164,7 +261,7 @@ function parseFlags(argv: readonly string[]): ParsedFlags {
   const values = new Map<string, string>();
   const boolean = new Set<string>();
   const positionals: string[] = [];
-  const booleanNames = new Set(["help", "activate", "accept-disclosure", "accept-terms", "accept-privacy"]);
+  const booleanNames = new Set(["help", "activate", "accept-disclosure", "accept-terms", "accept-privacy", "confirm"]);
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token.startsWith("--")) { positionals.push(token); continue; }
@@ -214,14 +311,18 @@ async function oneInstallation(store: JsonLocalStore, flags: ParsedFlags): Promi
 }
 
 async function requestJson(url: string, body: unknown, flags: ParsedFlags, dependencies: CliDependencies, env: NodeJS.ProcessEnv): Promise<unknown> {
+  return requestApiJson(url, "POST", body, flags, dependencies, env);
+}
+
+async function requestApiJson(url: string, method: "GET" | "POST", body: unknown, flags: ParsedFlags, dependencies: CliDependencies, env: NodeJS.ProcessEnv): Promise<unknown> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" && parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost") throw new Error("Ad Daddy API URLs must use HTTPS");
   if (parsed.username || parsed.password) throw new Error("Ad Daddy API URLs cannot contain credentials");
   const token = flags.values.get("token") ?? env.AD_DADDY_API_TOKEN;
   const response = await (dependencies.fetch ?? globalThis.fetch)(parsed, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify(body),
+    method,
+    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(30_000),
   });
   let responseBody: unknown;
@@ -258,15 +359,46 @@ function boundedRemoteMessage(value: unknown): string {
 }
 function boundedMessage(error: unknown): string { return (error instanceof Error ? error.message : "Command failed").slice(0, 320); }
 
-function makeScheduler(flags: ParsedFlags, dependencies: CliDependencies, env: NodeJS.ProcessEnv): LaunchdScheduler | undefined {
-  if ((flags.values.get("scheduler") ?? env.AD_DADDY_SCHEDULER) !== "launchd") return undefined;
-  const platform = dependencies.platform ?? process.platform;
-  if (platform !== "darwin") throw new Error("launchd scheduling is available only on macOS");
-  const homeDirectory = dependencies.homeDirectory ?? homedir();
-  return new LaunchdScheduler(new NodeLaunchdHost(), {
-    homeDirectory,
-    executablePath: dependencies.executablePath ?? process.argv[1],
+function sponsorshipIdentity(config: LocalInstallationConfig) {
+  if (!config.deviceCredential) throw new Error("Receiver device enrollment is required");
+  return {
+    receiverAccountId: config.accountId,
+    installationId: config.installationId,
+    consentVersion: config.consentVersion,
+    credentialReference: config.deviceCredential.credentialReference,
+    deviceKeyThumbprint: config.deviceCredential.keyThumbprint,
+  };
+}
+
+function adDaddyEnvironment(env: NodeJS.ProcessEnv): AdDaddyEnvironment {
+  const value = env.AD_DADDY_ENV ?? "test";
+  if (!(["test", "development", "staging", "production"] as const).includes(value as AdDaddyEnvironment)) throw new Error("AD_DADDY_ENV is invalid");
+  return value as AdDaddyEnvironment;
+}
+
+async function publishConfig(config: LocalInstallationConfig, flags: ParsedFlags, dependencies: CliDependencies, env: NodeJS.ProcessEnv) {
+  const apiBaseUrl = flags.values.get("api-url") ?? env.AD_DADDY_API_URL;
+  if (!apiBaseUrl) throw new Error("profile publication requires --api-url or AD_DADDY_API_URL");
+  return publishReceiverProfile({
+    config, provider: dependencies.deviceKeyProvider ?? new MacOSDeviceKeyProvider({ platform: dependencies.platform }),
+    environment: adDaddyEnvironment(env), apiBaseUrl, fetch: dependencies.fetch,
   });
+}
+
+async function syncConfig(config: LocalInstallationConfig, store: JsonLocalStore, flags: ParsedFlags, dependencies: CliDependencies, env: NodeJS.ProcessEnv) {
+  const apiBaseUrl = flags.values.get("api-url") ?? env.AD_DADDY_API_URL;
+  if (!apiBaseUrl) throw new Error("profile sync requires --api-url or AD_DADDY_API_URL");
+  const remote = await fetchReceiverProfile({
+    config, provider: dependencies.deviceKeyProvider ?? new MacOSDeviceKeyProvider({ platform: dependencies.platform }),
+    environment: adDaddyEnvironment(env), apiBaseUrl, fetch: dependencies.fetch,
+  });
+  const enabled = Object.fromEntries(Object.keys(remote.publishedFields).map((key) => [key, true])) as ReceiverFieldSelection;
+  const synced: LocalInstallationConfig = {
+    ...config, ...remote, profile: { values: remote.publishedFields, enabled },
+    deviceCredential: config.deviceCredential,
+  };
+  await store.put(synced);
+  return synced;
 }
 
 async function createLocalDeliveryRuntime(
@@ -305,13 +437,6 @@ function assertInstallationId(value: unknown): asserts value is string {
 async function writeFallbackReceipt(path: string, receipt: GenericPlacementReceipt): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await writeFile(path, `${JSON.stringify({ sponsoredBy: "Ad Daddy", receipt }, null, 2)}\n`, { mode: 0o600 });
-}
-
-class NodeLaunchdHost implements LaunchdHost {
-  async write(path: string, contents: string): Promise<void> { await mkdir(dirname(path), { recursive: true, mode: 0o700 }); await writeFile(path, contents, { mode: 0o600 }); }
-  async remove(path: string): Promise<void> { await rm(path, { force: true }); }
-  async bootstrap(_label: string, path: string): Promise<void> { await execFile("launchctl", ["bootstrap", `gui/${process.getuid?.() ?? 0}`, path]); }
-  async bootout(label: string): Promise<void> { await execFile("launchctl", ["bootout", `gui/${process.getuid?.() ?? 0}/${label}`]); }
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";

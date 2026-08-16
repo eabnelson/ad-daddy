@@ -6,7 +6,7 @@ type CheckedResponse<Response> = { status: "checked"; response: Response };
 type CheckInput<Response> = {
   installationId: string;
   store: LocalStore;
-  poll: (publishedFields: object) => Promise<Response>;
+  poll: (publishedFields: object, now: Date) => Promise<Response>;
   placementsToday?: number;
   now?: Date;
 };
@@ -41,12 +41,11 @@ export async function runManualCheck<Response, Delivery>(input: CheckInput<Respo
     if (!decision.reason) throw new Error("A denied check policy must include a reason");
     return { status: "skipped", reason: decision.reason } as const;
   }
-  const response = await input.poll(config.publishedFields);
+  const response = await input.poll(config.publishedFields, now);
   const delivery = input.delivery
     ? await input.delivery.deliver(response, now)
     : undefined;
-  config.lastCheckedAt = now.toISOString();
-  await input.store.put(config);
+  await input.store.markCheckedIfCurrent(config.installationId, config.consentVersion, now.toISOString());
   return {
     status: "checked",
     response,

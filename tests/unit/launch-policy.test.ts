@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assertProductionCashSettlementCapability,
   LaunchPolicyError,
   validateLaunchPolicy,
   type ProductionLaunchPolicy,
@@ -113,4 +114,12 @@ test("non-production policy may use explicit fixtures without production approva
     environment: "test",
     version: "closed-beta/2026-08-15",
   });
+});
+
+test("production cash settlement stays fail-closed until host-integrity and durable velocity controls exist", () => {
+  assert.doesNotThrow(() => assertProductionCashSettlementCapability("test"));
+  assert.throws(
+    () => assertProductionCashSettlementCapability("production"),
+    /host-integrity.*durable reward-velocity|durable reward-velocity.*host-integrity/i,
+  );
 });

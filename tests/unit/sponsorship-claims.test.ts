@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 
 import type { SignedPlacement } from "@ad-daddy/host-adapters";
@@ -10,6 +10,7 @@ import {
   verifySponsorshipGrant,
   type SponsorshipOutcome,
 } from "../../lib/marketplace/sponsorship-claims.ts";
+import { MemorySettlementReviewApprovalRepository, SettlementReviewService } from "../../lib/marketplace/settlement-review.ts";
 
 const NOW = new Date("2026-08-15T18:00:00.000Z");
 
@@ -40,6 +41,7 @@ test("signed grant verification covers receiver, reservation, economics, creativ
   assert.equal(ready.status, "ready");
   if (ready.status !== "ready") return;
   const verified = verifySponsorshipGrant(ready.grant, fixture.grantPublicKey, NOW);
+  assert.equal(verified.claimId, ready.claimId);
   assert.equal(verified.receiverAccountId, "receiver_1");
   assert.equal(verified.reservationId, "reservation_1");
   assert.equal(verified.receiverAmountMinor, 500);
@@ -75,6 +77,38 @@ test("creative redemption is device-bound, rechecks consent and issues one short
   await assert.rejects(fixture.service.creative(pulled.claimId, fixture.device, NOW), /active consent/i);
 });
 
+test("an undisplayed local lease cancellation releases once and can never settle", async () => {
+  const fixture = setup();
+  await fixture.service.next(fixture.device, NOW);
+  fixture.repository.setOutcome(fixture.opportunityId, fixture.outcome);
+  const pulled = await fixture.service.next(fixture.device, NOW);
+  assert.equal(pulled.status, "ready");
+  if (pulled.status !== "ready") return;
+  await fixture.service.creative(pulled.claimId, fixture.device, NOW);
+  assert.equal((await fixture.service.cancel(pulled.claimId, fixture.device, NOW)).status, "cancelled");
+  assert.equal(fixture.releases, 1);
+  assert.equal((await fixture.repository.getClaim(pulled.claimId))?.state, "cancelled");
+  const receipt = signDisplayReceipt(
+    fixture.receiptPayload(pulled.claimId, pulled.grant.payload.grantDigest, pulled.grant.payload.creativeDigest),
+    fixture.devicePrivateKey,
+  );
+  await assert.rejects(fixture.service.receipt(pulled.claimId, fixture.device, receipt, NOW), /active.*lease/i);
+  assert.equal((await fixture.service.cancel(pulled.claimId, fixture.device, NOW)).status, "cancelled");
+  assert.equal(fixture.releases, 1);
+
+  const recovery = setup({ failFirstRelease: true });
+  await recovery.service.next(recovery.device, NOW);
+  recovery.repository.setOutcome(recovery.opportunityId, recovery.outcome);
+  const retryable = await recovery.service.next(recovery.device, NOW);
+  assert.equal(retryable.status, "ready");
+  if (retryable.status !== "ready") return;
+  await recovery.service.creative(retryable.claimId, recovery.device, NOW);
+  await assert.rejects(recovery.service.cancel(retryable.claimId, recovery.device, NOW), /injected release failure/);
+  assert.equal((await recovery.repository.getClaim(retryable.claimId))?.state, "cancelled");
+  assert.equal((await recovery.service.cancel(retryable.claimId, recovery.device, NOW)).status, "cancelled");
+  assert.equal(recovery.releases, 1);
+});
+
 test("first signed display receipt wins and base settlement is retried exactly once after a crash", async () => {
   const fixture = setup({ failFirstSettlement: true });
   await fixture.service.next(fixture.device, NOW);
@@ -100,7 +134,7 @@ test("first signed display receipt wins and base settlement is retried exactly o
   await assert.rejects(fixture.service.receipt(pulled.claimId, fixture.device, secondSurface, NOW), /first verified surface/i);
 });
 
-test("a leased display can submit offline during grace and otherwise moves to review without release", async () => {
+test("a leased display can submit offline during grace while an abandoned no-receipt lease releases", async () => {
   const offline = setup();
   await offline.service.next(offline.device, NOW);
   offline.repository.setOutcome(offline.opportunityId, offline.outcome);
@@ -124,8 +158,46 @@ test("a leased display can submit offline during grace and otherwise moves to re
   await missingReceipt.service.expire(new Date(NOW.getTime() + 40_000));
   assert.equal((await missingReceipt.repository.getClaim(leased.claimId))?.state, "delivery_leased");
   await missingReceipt.service.expire(new Date(NOW.getTime() + 46_000));
-  assert.equal((await missingReceipt.repository.getClaim(leased.claimId))?.state, "settlement_review");
-  assert.equal(missingReceipt.releases, 0);
+  assert.equal((await missingReceipt.repository.getClaim(leased.claimId))?.state, "cancelled");
+  assert.equal(missingReceipt.releases, 1);
+
+  const recovery = setup({ failFirstRelease: true });
+  await recovery.service.next(recovery.device, NOW);
+  recovery.repository.setOutcome(recovery.opportunityId, recovery.outcome);
+  const abandoned = await recovery.service.next(recovery.device, NOW, recovery.opportunityId);
+  assert.equal(abandoned.status, "ready");
+  if (abandoned.status !== "ready") return;
+  await recovery.service.creative(abandoned.claimId, recovery.device, NOW);
+  await assert.rejects(recovery.service.expire(new Date(NOW.getTime() + 46_000)), /injected release failure/);
+  assert.equal((await recovery.repository.getClaim(abandoned.claimId))?.state, "cancelled");
+  await recovery.service.expire(new Date(NOW.getTime() + 61_000));
+  assert.equal(recovery.releaseAttempts, 2);
+  assert.equal(recovery.releases, 1);
+});
+
+test("a review with a durable verified receipt settles while an undisplayed review releases", async () => {
+  const fixture = setup({ failFirstSettlement: true });
+  await fixture.service.next(fixture.device, NOW);
+  fixture.repository.setOutcome(fixture.opportunityId, fixture.outcome);
+  const ready = await fixture.service.next(fixture.device, NOW);
+  assert.equal(ready.status, "ready");
+  if (ready.status !== "ready") return;
+  await fixture.service.creative(ready.claimId, fixture.device, NOW);
+  const receipt = signDisplayReceipt(
+    fixture.receiptPayload(ready.claimId, ready.grant.payload.grantDigest, ready.grant.payload.creativeDigest),
+    fixture.devicePrivateKey,
+  );
+  await assert.rejects(fixture.service.receipt(ready.claimId, fixture.device, receipt, NOW), /injected settlement crash/);
+  await fixture.service.expire(new Date(NOW.getTime() + 46_000));
+  assert.equal((await fixture.repository.getClaim(ready.claimId))?.state, "settlement_review");
+  const settleReview = new SettlementReviewService(fixture.service, new MemorySettlementReviewApprovalRepository());
+  assert.equal((await settleReview.approve({ claimId: ready.claimId, operatorAccountId: "operator_1", resolution: "settled", now: new Date(NOW.getTime() + 106_001) })).status,
+    "pending_second_operator");
+  assert.equal((await settleReview.approve({ claimId: ready.claimId, operatorAccountId: "operator_2", resolution: "settled", now: new Date(NOW.getTime() + 106_002) })).status,
+    "settled");
+  assert.equal(fixture.settlementSuccesses, 1);
+  assert.equal(fixture.releases, 0);
+  assert.equal((await fixture.repository.getClaim(ready.claimId))?.state, "consumed");
 });
 
 test("unredeemed expiry releases once while displayed receipt recovery moves to review", async () => {
@@ -216,7 +288,7 @@ function setup(options: { failFirstSettlement?: boolean; failFirstRelease?: bool
   const deviceKeys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const devicePublicJwk = deviceKeys.publicKey.export({ format: "jwk" });
   const devicePrivateKey = deviceKeys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
-  const opportunityId = `opportunity:install_1:4:${Math.floor(NOW.getTime() / 60_000)}`;
+  const opportunityId = `opp_${createHash("sha256").update(`install_1:4:${Math.floor(NOW.getTime() / 60_000)}`).digest("base64url")}`;
   const repository = new MemorySponsorshipClaimRepository({
     receivers: [{ accountId: "receiver_1", receiverProfileId: "profile_1", installationId: "install_1", consentVersion: 4, status: "active" }],
     opportunityWindowMs: 60_000,
@@ -231,6 +303,7 @@ function setup(options: { failFirstSettlement?: boolean; failFirstRelease?: bool
   let releaseAttempts = 0;
   let settlementAttempts = 0;
   let settlementSuccesses = 0;
+  const releasedReservations = new Set<string>();
   const service = new SponsorshipClaimService(repository, {
     keyId: "grant_key_1",
     privateKeyPem: grantKeys.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
@@ -244,10 +317,13 @@ function setup(options: { failFirstSettlement?: boolean; failFirstRelease?: bool
         if (options.failFirstSettlement && settlementAttempts === 1) throw new Error("injected settlement crash");
         settlementSuccesses += 1;
       },
-      async release() {
+      async release(input) {
         releaseAttempts += 1;
         if (options.failFirstRelease && releaseAttempts === 1) throw new Error("injected release failure");
-        releases += 1;
+        if (!releasedReservations.has(input.reservationId)) {
+          releasedReservations.add(input.reservationId);
+          releases += 1;
+        }
       },
     },
   });
@@ -262,7 +338,7 @@ function setup(options: { failFirstSettlement?: boolean; failFirstRelease?: bool
       protocolVersion: 1 as const, claimId, grantDigest, reservationId: "reservation_1", placementId: "placement_1",
       creativeDigest, installationId: "install_1", deviceKeyThumbprint: "thumbprint_1",
       hostKind: "codex" as const, hostSessionId: "thread_1", hostTurnId: "turn_1", outputSha256: "a".repeat(64),
-      adapterVersion: "0.1.0", policyVersion: "pull/v1", surface: "sidebar_session" as const,
+      adapterVersion: "0.1.0", hostVersion: "0.146.1", policyVersion: "pull/v1", surface: "sidebar_session" as const,
       audience: "ad-daddy:test" as const, nonce: "receipt-nonce-1", displayedAt: NOW.toISOString(),
     }),
   };

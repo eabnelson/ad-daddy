@@ -1,0 +1,1 @@
+ALTER TABLE `placements` ADD `receiver_action` text;

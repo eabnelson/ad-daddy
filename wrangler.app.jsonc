@@ -12,6 +12,7 @@
   "assets": {
     "directory": "./dist/client"
   },
+  "triggers": { "crons": ["* * * * *"] },
   "d1_databases": [
     {
       "binding": "DB",
@@ -32,6 +33,7 @@
       "vars": {
         "AD_DADDY_ENV": "staging"
       },
+      "triggers": { "crons": ["* * * * *"] },
       "d1_databases": [
         {
           "binding": "DB",
@@ -52,6 +54,7 @@
       "vars": {
         "AD_DADDY_ENV": "production"
       },
+      "triggers": { "crons": ["* * * * *"] },
       "d1_databases": [
         {
           "binding": "DB",

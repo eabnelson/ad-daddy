@@ -43,7 +43,7 @@ export function findEligibleOpportunities(
   candidates: readonly OpportunityCandidate[],
   now = new Date(),
 ): OpportunityView[] {
-  if (candidates.length > 100) throw new Error("Opportunity search is limited to 100 candidates per page");
+  if (candidates.length > 2_000) throw new Error("Opportunity search exceeded the bounded candidate scan");
   const seen = new Set<string>();
   const results: OpportunityView[] = [];
   for (const candidate of candidates) {

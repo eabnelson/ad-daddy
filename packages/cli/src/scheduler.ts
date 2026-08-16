@@ -20,8 +20,9 @@ export function evaluateCheckPolicy(policy: SchedulerPolicy, state: { now: Date;
   return { allowed: true };
 }
 
-export function schedulerSupport(platform: NodeJS.Platform | string) {
-  if (platform === "darwin") return { automaticDelivery: true, manualCommand: "ad-daddy check", message: "Automatic delivery is available through an approved macOS launchd job." };
+export function schedulerSupport(platform: NodeJS.Platform | string, backgroundCapabilityVerified = false) {
+  if (platform === "darwin" && backgroundCapabilityVerified) return { automaticDelivery: true, manualCommand: "ad-daddy check", message: "Automatic delivery is available through this installation's verified macOS background capability." };
+  if (platform === "darwin") return { automaticDelivery: false, manualCommand: "ad-daddy check", message: "Automatic delivery is unavailable until this installation passes the macOS background capability probe; run ad-daddy check manually." };
   return { automaticDelivery: false, manualCommand: "ad-daddy check", message: `Automatic delivery is unavailable on ${platform}; run ad-daddy check manually.` };
 }
 
