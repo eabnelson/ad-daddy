@@ -1,12 +1,13 @@
 import { TeamExperience } from "./team-experience";
 import styles from "./team.module.css";
 import Link from "next/link";
+import { BrandWordmark } from "../brand";
 
 export default function TeamPage() {
   return (
     <main className={styles.page}>
       <header className={styles.header}>
-        <Link href="/" className={styles.wordmark}>AD DADDY</Link>
+        <Link href="/" className={styles.wordmark} aria-label="Ad Daddy"><BrandWordmark /></Link>
         <span>Private team mode · No real money</span>
       </header>
       <section className={styles.intro}>

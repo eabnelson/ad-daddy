@@ -30,9 +30,11 @@ test("private team workspace makes the no-money sender and receiver loop self-se
   await access("public/TEAM-MODE.md");
 });
 
-test("the Vercel app exposes the team page, durable API, and agent-readable markdown", async () => {
-  const [page, route, instructions, packageJson, rootPackage, vercelConfig, runbook] = await Promise.all([
+test("the Vercel app exposes the minimal handoff, durable API, and agent-readable markdown", async () => {
+  const [page, layout, teamPage, route, instructions, packageJson, rootPackage, vercelConfig, runbook] = await Promise.all([
     readFile("apps/vercel/app/page.tsx", "utf8"),
+    readFile("apps/vercel/app/layout.tsx", "utf8"),
+    readFile("apps/vercel/app/team/page.tsx", "utf8"),
     readFile("apps/vercel/app/api/team/route.ts", "utf8"),
     readFile("apps/vercel/app/ad-daddy.md/route.ts", "utf8"),
     readFile("apps/vercel/package.json", "utf8"),
@@ -40,7 +42,12 @@ test("the Vercel app exposes the team page, durable API, and agent-readable mark
     readFile("vercel.json", "utf8"),
     readFile("docs/VERCEL-TEAM-PROOF.md", "utf8"),
   ]);
-  assert.match(page, /TeamPage/);
+  assert.match(page, /LandingPage/);
+  assert.match(teamPage, /export \{ default \} from "\.\.\/\.\.\/\.\.\/\.\.\/app\/team\/page"/);
+  assert.match(layout, /import \{ DM_Sans, Space_Mono \} from "next\/font\/google"/);
+  assert.match(layout, /DM_Sans\(\{[\s\S]*variable: "--font-sans"[\s\S]*subsets: \["latin"\][\s\S]*\}\)/);
+  assert.match(layout, /Space_Mono\(\{[\s\S]*variable: "--font-mono"[\s\S]*subsets: \["latin"\][\s\S]*weight: \["400", "700"\][\s\S]*\}\)/);
+  assert.match(layout, /<body className=\{`\$\{sans\.variable\} \$\{mono\.variable\}`\}>/);
   assert.match(route, /PostgresTeamModeStore/);
   assert.match(route, /hosted_test/);
   assert.match(route, /DATABASE_URL/);

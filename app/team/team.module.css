@@ -3,7 +3,7 @@
 .page button { cursor: pointer; }
 .page button:focus-visible, .page a:focus-visible, .page input:focus-visible, .page textarea:focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
 .header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--ink); font: 700 10px var(--font-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
-.wordmark { color: var(--red); font-family: Impact, "Arial Narrow", sans-serif; font-size: 24px; letter-spacing: -.02em; text-decoration: none; }
+.wordmark { font-family: Impact, "Arial Narrow", sans-serif; font-size: 24px; letter-spacing: -.02em; text-decoration: none; }
 .intro { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, .6fr); align-items: end; width: min(1240px, 100%); margin: clamp(68px, 11vh, 130px) auto 80px; }
 .intro > p { grid-column: 1/-1; font: 700 10px var(--font-mono), monospace; letter-spacing: .13em; text-transform: uppercase; }
 .intro h1 { margin: 18px 0 0; font: 900 clamp(76px, 11vw, 160px)/.72 Impact, "Arial Narrow", sans-serif; letter-spacing: -.055em; text-transform: uppercase; }

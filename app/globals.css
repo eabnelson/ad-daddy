@@ -4,6 +4,7 @@
   --paper: #efe4cc;
   --ink: #17140f;
   --red: #9f2c21;
+  --brand-red: #d71920;
   --line: #c8baa0;
   --white: #fffaf0;
 }
@@ -22,38 +23,91 @@ a { color: inherit; }
 .launch-page {
   min-height: 100svh;
   display: grid;
-  place-items: center;
-  padding: clamp(24px, 5vw, 72px);
+  grid-template-rows: auto 1fr;
+  padding: clamp(28px, 5vw, 72px);
+  background: #f5f2e9;
 }
-.launch-brand { width: min(1180px, 100%); text-align: center; }
+.launch-brand { width: min(1280px, 100%); margin: 0 auto; text-align: center; }
 .launch-brand h1 {
   margin: 0;
-  color: var(--red);
   font-family: Impact, "Arial Narrow", "Arial Black", sans-serif;
-  font-size: clamp(76px, 17vw, 248px);
+  font-size: clamp(74px, 16vw, 230px);
   font-weight: 900;
-  letter-spacing: -.055em;
-  line-height: .78;
+  letter-spacing: -.06em;
+  line-height: .8;
   text-transform: uppercase;
+  white-space: nowrap;
 }
+.brand-ad { color: var(--brand-red); }
+.brand-daddy { color: var(--ink); }
 .launch-brand > p {
-  margin: clamp(28px, 5vw, 58px) 0 0;
-  font-size: clamp(32px, 5vw, 72px);
+  margin: clamp(22px, 3vw, 38px) 0 0;
+  font-size: clamp(22px, 3vw, 42px);
   font-style: italic;
-  letter-spacing: -.055em;
+  letter-spacing: -.04em;
   line-height: 1;
 }
-.launch-brand nav { display: flex; justify-content: center; gap: 24px; margin-top: 38px; }
-.launch-brand nav a { font: 700 10px var(--font-mono), monospace; letter-spacing: .08em; text-underline-offset: 5px; text-transform: uppercase; }
-.launch-brand nav a:hover, .launch-brand nav a:focus-visible { color: var(--red); }
-.launch-brand nav a:focus-visible { outline: 2px solid var(--ink); outline-offset: 6px; }
+.launch-handoff {
+  align-self: center;
+  width: min(1020px, 100%);
+  margin: clamp(72px, 12vh, 150px) auto clamp(18px, 4vh, 54px);
+}
+.launch-handoff h2 {
+  margin: 0 0 clamp(24px, 4vw, 46px);
+  font-family: Impact, "Arial Narrow", "Arial Black", sans-serif;
+  font-size: clamp(54px, 9.5vw, 132px);
+  font-weight: 900;
+  letter-spacing: -.055em;
+  line-height: .82;
+  text-align: center;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.launch-handoff h2 span { color: var(--brand-red); }
+.launch-prompt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  border: 2px solid var(--ink);
+  background: #fff;
+  box-shadow: 10px 10px 0 var(--brand-red);
+}
+.launch-prompt p {
+  min-width: 0;
+  margin: 0;
+  padding: 20px 22px;
+  overflow-wrap: anywhere;
+  font: 700 clamp(12px, 1.3vw, 15px)/1.45 var(--font-mono), "Courier New", monospace;
+}
+.launch-prompt button {
+  min-width: 142px;
+  border: 0;
+  border-left: 2px solid var(--ink);
+  padding: 0 20px;
+  background: var(--ink);
+  color: #fff;
+  cursor: pointer;
+  font: 700 11px var(--font-mono), "Courier New", monospace;
+  letter-spacing: .08em;
+}
+.launch-prompt button:hover { background: var(--brand-red); }
+.launch-prompt button:focus-visible { outline: 3px solid var(--brand-red); outline-offset: 5px; }
+
+@media (max-width: 620px) {
+  .launch-page { padding: 30px 18px 38px; }
+  .launch-brand h1 { font-size: clamp(62px, 22vw, 112px); }
+  .launch-handoff { margin-top: 90px; }
+  .launch-handoff h2 { font-size: clamp(48px, 15vw, 78px); white-space: normal; }
+  .launch-prompt { grid-template-columns: 1fr; box-shadow: 7px 7px 0 var(--brand-red); }
+  .launch-prompt button { min-height: 52px; border-top: 2px solid var(--ink); border-left: 0; }
+}
 
 .demo-page { min-height: 100svh; padding: 22px clamp(20px, 4vw, 64px) 72px; overflow: hidden; }
 .demo-page button, .demo-page input, .demo-page textarea, .demo-page select { font: inherit; }
 .demo-page button { cursor: pointer; }
 .demo-page button:focus-visible, .demo-page a:focus-visible, .demo-page input:focus-visible, .demo-page textarea:focus-visible, .demo-page select:focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
 .demo-nav { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; border-bottom: 1px solid var(--ink); padding-bottom: 14px; font: 700 10px var(--font-mono), monospace; letter-spacing: .08em; text-transform: uppercase; }
-.demo-wordmark { color: var(--red); font-family: Impact, "Arial Narrow", sans-serif; font-size: 24px; letter-spacing: -.02em; text-decoration: none; }
+.demo-wordmark { font-family: Impact, "Arial Narrow", sans-serif; font-size: 24px; letter-spacing: -.02em; text-decoration: none; }
 .demo-nav-status { display: flex; align-items: center; gap: 8px; }
 .demo-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 3px rgb(159 44 33 / 12%); }
 .demo-step, .demo-reset { justify-self: end; }

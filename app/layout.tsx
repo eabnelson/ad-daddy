@@ -1,5 +1,5 @@
-import type { Metadata } from "next";
 import { DM_Sans, Space_Mono } from "next/font/google";
+import { brandMetadata } from "./brand";
 import "./globals.css";
 
 const sans = DM_Sans({
@@ -13,23 +13,7 @@ const mono = Space_Mono({
   weight: ["400", "700"],
 });
 
-export const metadata: Metadata = {
-  title: "Ad Daddy",
-  description: "Earn while you build.",
-  openGraph: {
-    title: "Ad Daddy",
-    description: "Earn while you build.",
-  },
-  twitter: {
-    card: "summary",
-    title: "Ad Daddy",
-    description: "Earn while you build.",
-  },
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
-};
+export const metadata = brandMetadata();
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (

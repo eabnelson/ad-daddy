@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { BrandWordmark } from "../brand";
 
 import { buildDemoAuction, createSponsoredSession, DEMO_FREQUENCIES, isDemoFrequencyId, suggestDemoMinimumTakeHomeRange, type DemoActionReward, type DemoBid, type DemoFrequencyId, type DemoMarketContext, type DemoProfile, type DemoRewardType } from "../../lib/demo/market";
 import { creditDemoAction, creditDemoPlacement, INITIAL_DEMO_CASH_REWARDS } from "../../lib/demo/reward-state";
@@ -162,7 +163,7 @@ export function DemoExperience() {
   return (
     <main className={`demo-page demo-stage-${stage}`}>
       <nav className="demo-nav" aria-label="Demo navigation">
-        <Link href="/" className="demo-wordmark">AD DADDY</Link>
+        <Link href="/" className="demo-wordmark" aria-label="Ad Daddy"><BrandWordmark /></Link>
         <div className="demo-nav-status">
           <span className="demo-live-dot" aria-hidden="true" />
           Interactive demo · No real money
