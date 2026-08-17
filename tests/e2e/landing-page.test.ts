@@ -4,14 +4,15 @@ import test from "node:test";
 
 const instruction = "tell your agent to get setup with Ad Daddy and start earning before you build";
 
-test("the public launch surface contains one instruction and one working setup link", async () => {
+test("the public launch surface keeps the setup instruction and adds the interactive demo", async () => {
   const [page, css] = await Promise.all([
     readFile("app/page.tsx", "utf8"),
     readFile("app/globals.css", "utf8"),
   ]);
   assert.match(page.replace(/<[^>]+>/g, ""), new RegExp(instruction));
-  assert.equal((page.match(/<a\b/g) ?? []).length, 1);
+  assert.equal((page.match(/<a\b/g) ?? []).length, 2);
   assert.match(page, /href="\/AD-DADDY\.md"/);
+  assert.match(page, /href="\/demo"/);
   assert.match(css, /:focus-visible/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /@media \(max-width: 620px\)/);
