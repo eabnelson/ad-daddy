@@ -94,6 +94,10 @@ test("a verified rendered receipt settles the reserved base reward once with exa
   assert.equal(budgets.snapshot("campaign_1").reservedMinor, 0);
 
   await assert.rejects(service.settleBase({ ...input, placementId: "placement_bad", reservationId: "reservation_bad", receipt: { ...receipt(), outputSha256: "0".repeat(64) } }), /Verified sponsored render receipt/);
+  await assert.rejects(service.settleBase({
+    ...input, placementId: "placement_team", reservationId: "reservation_team",
+    receipt: { ...receipt(), placementId: "placement_team", privateTeamPoc: true },
+  }), /Verified sponsored render receipt/);
 });
 
 test("non-cash offers never enter the ledger and reward velocity holds anomalous cash", async () => {
@@ -132,7 +136,7 @@ function transfer(overrides: Partial<TempoTransferEvent>): TempoTransferEvent {
 function receipt(): CodexDeliveryReceipt {
   const output = "Sponsored via Ad Daddy\nNeon — Postgres\nReward $5.00\nMatched: TypeScript";
   return {
-    placementId: "placement_1", threadId: "thread_1", turnId: "turn_1", title: "Sponsored · Postgres",
+    placementId: "placement_1", threadId: "thread_1", turnId: "turn_1", title: "AD DADDY: Postgres",
     output, outputSha256: createHash("sha256").update(output).digest("hex"), advertiserDisplayName: "Neon",
     receiverAmountMinor: 500, currency: "USD", signalsUsed: ["TypeScript"], toolItemCount: 0,
     cliVersion: "0.146.1", userAgent: "Codex Desktop/0.146.1", model: "gpt-5.6-luna", isolatedCwd: "/tmp/ad-daddy",

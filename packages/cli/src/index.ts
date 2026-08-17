@@ -143,7 +143,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
       } else {
         const pollUrl = flags.values.get("poll-url") ?? env.AD_DADDY_POLL_URL;
         if (!pollUrl) throw new Error("check requires an enrolled device or the explicit legacy poll URL");
-        result = await runManualCheck({
+        const checked = await runManualCheck({
           installationId: config.installationId,
           store,
           poll: async (publishedFields) => requestJson(pollUrl, {
@@ -153,6 +153,12 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
           }, flags, dependencies, env),
           delivery,
         });
+        if (env.AD_DADDY_PRIVATE_TEAM_MODE === "1" && checked.status === "checked" && "delivery" in checked &&
+          (checked.delivery?.status === "native" || checked.delivery?.status === "fallback")) {
+          const deliveryId = teamPlacementId(checked.response);
+          await requestJson(pollUrl, { action: "ack", deliveryId }, flags, dependencies, env);
+        }
+        result = checked;
       }
     } else if (command === "enroll") {
       const operation = flags.positionals[0];
@@ -357,6 +363,13 @@ function boundedRemoteMessage(value: unknown): string {
   const message = record && (typeof record.message === "string" ? record.message : typeof record.error === "string" ? record.error : undefined);
   return (message ?? "request rejected").slice(0, 240);
 }
+function teamPlacementId(value: unknown): string {
+  const placement = recordProperty(value, "placement");
+  const payload = placement ? recordProperty(placement, "payload") : undefined;
+  const placementId = payload?.placementId;
+  if (typeof placementId !== "string" || !placementId) throw new Error("Private team placement is missing its delivery ID");
+  return placementId;
+}
 function boundedMessage(error: unknown): string { return (error instanceof Error ? error.message : "Command failed").slice(0, 320); }
 
 function sponsorshipIdentity(config: LocalInstallationConfig) {
@@ -425,6 +438,7 @@ async function createLocalDeliveryRuntime(
       isolatedCwd,
       environment: env,
       model: config.hostDisclosure.displayModel,
+      privateTeamPoc: env.AD_DADDY_PRIVATE_TEAM_MODE === "1",
     }),
     presentFallback: (receipt) => writeFallbackReceipt(fallbackPath, receipt),
   });

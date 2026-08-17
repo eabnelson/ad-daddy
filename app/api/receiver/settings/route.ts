@@ -7,6 +7,7 @@ import {
   type ReceiverFieldValues,
 } from "@ad-daddy/cli";
 import { D1ReceiverSettingsStore } from "../../../../lib/marketplace/receiver-settings.ts";
+import { verifiedAccountId } from "../../../../lib/auth/verified-request-identity.ts";
 
 const MAX_FORM_BYTES = 16_384;
 const TERMS_VERSION = "receiver-terms/2026-08-15";
@@ -29,7 +30,7 @@ export interface ReceiverSettingsRuntime {
 export function createReceiverSettingsHandler(runtime?: ReceiverSettingsRuntime) {
   return async function handle(request: Request): Promise<Response> {
     const activeRuntime = runtime ?? await getReceiverSettingsRuntime();
-    const accountId = request.headers.get("oai-authenticated-user-id");
+    const accountId = verifiedAccountId(request);
     if (!accountId) return json(401, { error: "human_authentication_required" });
     const origin = request.headers.get("origin");
     if (request.method !== "GET" && origin && origin !== new URL(request.url).origin) return json(403, { error: "cross_origin_submission_rejected" });

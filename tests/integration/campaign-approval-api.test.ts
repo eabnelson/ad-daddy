@@ -29,7 +29,7 @@ test("campaign money transitions require an exact server-issued approval capabil
   });
   const handler = createCampaignHandler(runtime, approvals);
   const request = (body: unknown) => new Request("https://ad.daddy/api/v1/campaigns", {
-    method: "POST", headers: { "content-type": "application/json", "oai-authenticated-user-id": "account_1" }, body: JSON.stringify(body),
+    method: "POST", headers: { "content-type": "application/json", "x-ad-daddy-verified-account-id": "account_1" }, body: JSON.stringify(body),
   });
   const forged = await handler(request({ action: "fund", campaignId: "campaign_1", approval: { accountId: "account_1" }, approvalId: "forged" }));
   assert.equal(forged.status, 409);

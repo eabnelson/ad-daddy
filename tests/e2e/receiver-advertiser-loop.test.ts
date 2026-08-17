@@ -112,7 +112,7 @@ test("seeded receiver and advertiser agents clear an auction, create one sponsor
   await attribution.settle("placement_1", new Date(NOW.getTime() + 1_000));
   assert.equal(ledgerRepository.transactions.length, 2);
 
-  const history = await createPlacementHistoryHandler(placementRepository)(new Request("https://ad-daddy.test/api/v1/placements", { headers: { "oai-authenticated-user-id": "receiver_1" } }));
+  const history = await createPlacementHistoryHandler(placementRepository)(new Request("https://ad-daddy.test/api/v1/placements", { headers: { "x-ad-daddy-verified-account-id": "receiver_1" } }));
   const historyBody = await history.json() as { placements: Array<{ bidderCount: number; economics: { receiverAmountMinor: number } }> };
   assert.equal(historyBody.placements[0].bidderCount, 2);
   assert.equal(historyBody.placements[0].economics.receiverAmountMinor, 500);
@@ -122,7 +122,7 @@ test("seeded receiver and advertiser agents clear an auction, create one sponsor
     new LifecycleEventStore(),
     createCampaignReportAuthority({ campaigns, brandVerifications: brands }, []),
   )(new Request("https://ad-daddy.test/api/v1/reports?campaignId=campaign_neon", {
-    headers: { "oai-authenticated-user-id": "advertiser_1" },
+    headers: { "x-ad-daddy-verified-account-id": "advertiser_1" },
   }));
   const reportBody = await reports.json() as { placements: Array<{ renderedResponse: string; measurement: { sessionOpen: string } }> };
   assert.match(reportBody.placements[0].renderedResponse, /Sponsored via Ad Daddy/);
@@ -166,7 +166,7 @@ class DemoCodexHost {
     let waiter: ((value: { method: string; params: Record<string, unknown> }) => void) | undefined;
     const emit = (value: { method: string; params: Record<string, unknown> }) => waiter ? (waiter(value), waiter = undefined) : notifications.push(value);
     return {
-      cliVersion: "0.146.1", userAgent: "Codex Desktop/0.146.1 (demo)", allowedInstructionSources: [],
+      cliVersion: "0.146.1", userAgent: "Codex Desktop/0.146.1 (demo)", allowedInstructionSources: [], builtInToolsDisabled: true,
       request: async <T>(method: string, paramsValue: unknown): Promise<T> => {
         const params = paramsValue as { threadId?: string; name?: string; input?: Array<{ text: string }> };
         if (method === "thread/list") return { data: [...this.threads.values()].map((thread) => ({ id: thread.id, name: thread.name, preview: thread.preview })), nextCursor: null } as T;

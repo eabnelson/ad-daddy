@@ -1,3 +1,5 @@
+import { assertSafeAdvertiserDisplayText } from "@ad-daddy/host-adapters/advertiser-content-policy";
+
 import type { RewardType } from "./profile.js";
 import { findEligibleOpportunities, type OpportunityCandidate, type OpportunityView } from "./opportunity.js";
 
@@ -245,6 +247,9 @@ function validateCampaign(input: CampaignDraft): void {
   const endsAt = Date.parse(input.schedule.endsAt);
   if (!Number.isFinite(startsAt) || !Number.isFinite(endsAt) || startsAt >= endsAt) throw new Error("Campaign schedule must have valid ordered timestamps");
   if (!input.creative.headline.trim() || !input.creative.body.trim() || input.creative.headline.length > 120 || input.creative.body.length > 4_000) throw new Error("Campaign creative must be non-empty and bounded");
+  assertSafeAdvertiserDisplayText(input.brand.name);
+  assertSafeAdvertiserDisplayText(input.creative.headline);
+  assertSafeAdvertiserDisplayText(input.creative.body);
   for (const [name, value] of [["maximum spend", input.maximumSpendMinor], ["maximum bid", input.maximumBidMinor], ["daily cap", input.dailyCapMinor], ["placement reward", input.guaranteedPlacementMinor], ["frequency", input.perUserFrequencyLimit]] as const) {
     if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer`);
   }

@@ -141,3 +141,22 @@ test("an eligible manual check hands the cleared response to the local delivery 
     delivery: { status: "native", placementId: "placement_1" },
   });
 });
+
+test("manual delivery validates against a post-response clock", async () => {
+  const store = new MemoryLocalStore();
+  await store.put({
+    installationId: "installation_clock", accountId: "account_1", role: "receiver",
+    profile: { values: {}, enabled: {} }, publishedFields: {}, cadenceMinutes: 60,
+    termsVersion: "terms/v1", privacyVersion: "privacy/v1", consentVersion: 1, status: "active",
+    hostDisclosure: { host: "Codex", consumesTurn: true },
+  });
+  const beforeRequest = new Date("2026-08-17T12:00:00.000Z");
+  const afterResponse = new Date("2026-08-17T12:00:00.250Z");
+  let observed: Date | undefined;
+  await runManualCheck({
+    installationId: "installation_clock", store, now: beforeRequest, deliveryNow: afterResponse,
+    poll: async () => ({ status: "ready" }),
+    delivery: { deliver: async (_response, now) => { observed = now; return { status: "native" }; } },
+  });
+  assert.equal(observed?.toISOString(), afterResponse.toISOString());
+});

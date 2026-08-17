@@ -3,6 +3,7 @@ import { cloudflareAuctionGateway, type AuctionGateway } from "../../../../lib/m
 import type { AuctionDefinition } from "../../../../lib/marketplace/auction.ts";
 import { getCampaignRuntime } from "../../../../lib/marketplace/campaign-registry.ts";
 import type { FixedWindowRateLimiter } from "../../../../lib/http/rate-limit.ts";
+import { verifiedAccountId } from "../../../../lib/auth/verified-request-identity.ts";
 
 export function createAuctionHandler(
   gateway: AuctionGateway = cloudflareAuctionGateway,
@@ -10,7 +11,7 @@ export function createAuctionHandler(
 ) {
   return async function handle(request: Request): Promise<Response> {
     const activeRateLimiter = rateLimiter ?? (await getCampaignRuntime()).campaignRateLimit;
-    const accountId = request.headers.get("oai-authenticated-user-id");
+    const accountId = verifiedAccountId(request);
     if (!accountId) return json(401, { error: "human_authentication_required" });
     const initialLimit = activeRateLimiter.check([`auction-actor:${accountId}`, `auction-ip:${request.headers.get("cf-connecting-ip") ?? "unknown"}`]);
     if (!initialLimit.allowed) return rateLimited(initialLimit.retryAfterSeconds);

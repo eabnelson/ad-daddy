@@ -3,6 +3,7 @@ import { opaqueTempoMemo, type TempoTransferEvent } from "../../../../../lib/pay
 import { getPaymentRuntime, type PaymentRuntime } from "../../../../../lib/payments/runtime.ts";
 import { getCampaignRuntime, type CampaignRuntime } from "../../../../../lib/marketplace/campaign-registry.ts";
 import type { PaymentEventEnvelope } from "../../../../../lib/auth/operator-event-envelope.ts";
+import { verifiedAccountId } from "../../../../../lib/auth/verified-request-identity.ts";
 
 type DepositBody =
   | { action: "prepare"; campaignId: string; amountMinor: number; expectedSender?: string }
@@ -20,7 +21,7 @@ export function createDepositHandler(injectedRuntime?: PaymentRuntime, campaigns
     catch (error) { return limitError(error); }
     try {
       if (body?.action === "prepare") {
-        const accountId = request.headers.get("oai-authenticated-user-id");
+        const accountId = verifiedAccountId(request);
         if (!accountId) return json(401, { error: "human_authentication_required" });
         const actorLimit = runtime.rateLimit.check([`deposit-actor:${accountId}`, `deposit-campaign:${body.campaignId}`]);
         if (!actorLimit.allowed) return rateLimited(actorLimit.retryAfterSeconds);

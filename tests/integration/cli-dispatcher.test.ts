@@ -45,6 +45,8 @@ test("installed ad-daddy bin dispatches every documented command as machine-read
     AD_DADDY_POLL_URL: `${base}/poll`,
     AD_DADDY_MARKETPLACE_PUBLIC_KEY_PEM: "pinned-test-key",
     AD_DADDY_LOCAL_ROOT: directory,
+    AD_DADDY_ENV: "development",
+    AD_DADDY_PRIVATE_TEAM_MODE: "1",
     CODEX_THREAD_ID: "active-task",
   };
 

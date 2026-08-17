@@ -141,7 +141,7 @@ export class SettlementService {
 function validateReceipt(input: BaseSettlementInput): void {
   const receipt = input.receipt;
   const computedHash = createHash("sha256").update(receipt.output).digest("hex");
-  if (receipt.placementId !== input.placementId || receipt.outputSha256 !== computedHash ||
+  if (receipt.privateTeamPoc === true || receipt.placementId !== input.placementId || receipt.outputSha256 !== computedHash ||
     receipt.receiverAmountMinor !== input.receiverAmountMinor || receipt.currency !== "USD" ||
     receipt.toolItemCount !== 0 || !receipt.sidebarVerified || !receipt.restartReadable || !receipt.listedAfterRestart ||
     receipt.activeTaskIdBefore !== receipt.activeTaskIdAfter || !receipt.output.startsWith("Sponsored via Ad Daddy")) {

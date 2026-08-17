@@ -72,7 +72,7 @@ test("advertiser reports resolve campaign and brand ownership server-side", asyn
   const handler = createReportHandler(repository, undefined, authority());
 
   const response = await handler(new Request("https://ad-daddy.test/api/v1/reports?campaignId=campaign_owner", {
-    headers: { "oai-authenticated-user-id": "advertiser_owner" },
+    headers: { "x-ad-daddy-verified-account-id": "advertiser_owner" },
   }));
 
   assert.equal(response.status, 200);
@@ -89,7 +89,7 @@ test("forged advertiser identity headers cannot expose another account's reports
 
   const response = await handler(new Request("https://ad-daddy.test/api/v1/reports?campaignId=campaign_owner", {
     headers: {
-      "oai-authenticated-user-id": "advertiser_attacker",
+      "x-ad-daddy-verified-account-id": "advertiser_attacker",
       "oai-advertiser-id": "adv_owner",
       "oai-advertiser-owner-id": "advertiser_attacker",
       "oai-operator-scope": "closed-beta-reporting",
@@ -110,7 +110,7 @@ test("reports fail closed when the campaign's brand binding is revoked or belong
   ]) {
     const response = await createReportHandler(repository, undefined, reportAuthority)(new Request(
       "https://ad-daddy.test/api/v1/reports?campaignId=campaign_owner",
-      { headers: { "oai-authenticated-user-id": "advertiser_owner" } },
+      { headers: { "x-ad-daddy-verified-account-id": "advertiser_owner" } },
     ));
     assert.equal(response.status, 404);
   }

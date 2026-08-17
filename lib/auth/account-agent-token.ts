@@ -1,3 +1,5 @@
+import { verifiedAccountId } from "./verified-request-identity.ts";
+
 export type AccountAgentScope = "campaign:manage" | "placement:read" | "placement:act" | "report:read";
 
 interface AccountAgentClaims {
@@ -65,7 +67,7 @@ async function deployedService() {
 }
 
 export async function authenticateAccountRequest(request: Request, scope: AccountAgentScope): Promise<string | undefined> {
-  const human = request.headers.get("oai-authenticated-user-id");
+  const human = verifiedAccountId(request);
   if (human) return human;
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) return undefined;

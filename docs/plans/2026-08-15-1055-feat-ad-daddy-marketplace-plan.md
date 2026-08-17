@@ -3,6 +3,7 @@ title: Ad Daddy Marketplace MVP - Plan
 type: feat
 date: 2026-08-15
 deepened: 2026-08-15
+revised: 2026-08-17
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
@@ -49,6 +50,7 @@ The product must create a market without corrupting the agent's active work. It 
 - **The MVP uses real stablecoin rewards in a closed beta.** `(session-settled: user-approved — chosen over demo-only money: the confirmed scope prioritizes a real-money loop while limiting public risk.)` Governs R16-R20.
 - **A dedicated display agent presents the ad.** `(session-settled: user-directed — chosen over zero-turn insertion: one constrained generation is acceptable because the sponsored session must appear in the ordinary sidebar with useful context.)` Governs R8-R9, R22-R23.
 - **Sponsored delivery is receiver-pulled, never marketplace-pushed.** `(session-settled: user-directed — chosen over platform-approved or server-pushed task insertion: the user's installed agent should fetch an ad like any other authorized data and remain the only component allowed to create a local session.)` Governs R32-R33.
+- **Delivery is unattended after one explicit local opt-in.** `(session-settled: user-directed — the receiver should not create an ad task or request each poll; their installed helper polls on their chosen schedule and creates the separate sponsored session locally when an offer clears.)` Governs R6, R8, R24, R32.
 
 ### Requirements
 
@@ -62,7 +64,7 @@ The product must create a market without corrupting the agent's active work. It 
 
 #### Matching and sponsored sessions
 
-- R6. The MVP checks for eligible placements only when the receiver or their agent explicitly runs `ad-daddy check`, while respecting quiet hours and per-host frequency caps. Automatic background delivery is not advertised or installed in the MVP; it may ship later only after the installed scheduler proves it can unlock the enrolled signing key, reach the supported local host interface, and create a sidebar-visible session from its actual background environment across app restart and sleep/wake.
+- R6. After a one-time explicit local opt-in, the receiver-owned helper checks for eligible placements automatically while respecting quiet hours, receiver frequency caps, and per-host limits. `ad-daddy check` remains a diagnostic and manual fallback. The installer may report background delivery active only after proving it can unlock the enrolled signing key, reach the supported local host interface, and create a sidebar-visible session from its actual background environment across app restart and sleep/wake.
 - R7. A placement is eligible only when it satisfies the receiver policy, advertiser policy, campaign budget, and receiver minimum take-home price.
 - R8. On a native-capable supported host, a winning placement creates one separate session in the ordinary session sidebar with the fixed title shape `Sponsored · {advertiser-selected title}`, while leaving the receiver's active session unchanged. A host without that capability receives the signed generic fallback and is never represented as native delivery.
 - R9. The new session runs one initial display turn under an Ad Daddy-owned instruction that identifies the sponsorship, treats every advertiser field as content rather than instructions, presents only validated text and supported attachments, and forbids tools or external actions. The session may show a sandboxed HTML mini-app or implementation prompt tailored to the consented profile, but it does not execute the advertised action.
@@ -145,12 +147,12 @@ The product must create a market without corrupting the agent's active work. It 
 
 #### Included in the MVP
 
-- Portable Agent Skill, local CLI with explicit receiver-authorized checks, hosted marketplace API, Codex adapter, generic HTML fallback, receiver settings, advertiser campaign setup, auction, Tempo stablecoin deposits, refunds, and payouts, non-cash offers, event measurement, and operator reporting.
+- Portable Agent Skill, local CLI with a one-time background opt-in and explicit diagnostic checks, hosted marketplace API, Codex adapter, generic HTML fallback, receiver settings, advertiser campaign setup, auction, Tempo stablecoin deposits, refunds, and payouts, non-cash offers, event measurement, and operator reporting.
 - Claude Code adapter feasibility is proven during the MVP and ships when a programmatic session can appear in its native session picker.
 
 #### Deferred to Follow-Up Work
 
-- Public self-service advertiser onboarding, automatic background delivery, fiat on/off-ramping, multi-chain settlement, smart-contract escrow, second-price auctions, automatic bid optimization, non-self-attested delivery fraud proofs, demographic targeting, retargeting, and third-party adapter certification.
+- Public self-service advertiser onboarding, background delivery on additional operating systems, fiat on/off-ramping, multi-chain settlement, smart-contract escrow, second-price auctions, automatic bid optimization, non-self-attested delivery fraud proofs, demographic targeting, retargeting, and third-party adapter certification.
 - Native adapters for hosts beyond Codex and Claude Code.
 
 #### Outside this product's identity
@@ -184,7 +186,7 @@ Product Contract changed: R8-R9 and R22-R23 authorize one display-only turn insi
 
 - KTD1. **Package a portable Agent Skill around a local CLI.** The skill handles conversation and policy; the CLI handles authentication, local configuration, polling, signed API calls, receipts, and host adapters. A prompt-only skill cannot run autonomously or guarantee native session creation. Covers R1-R6.
 - KTD2. **Store the authoritative receiver profile locally and publish versioned snapshots.** The marketplace receives allowlisted values, buckets, or locally derived summaries with a short expiry. Profile changes revoke earlier consent versions. Covers R3-R5, R24.
-- KTD3. **Make an explicit local check the MVP cadence authority.** A receiver or their existing agent runs `ad-daddy check`; the CLI applies quiet hours and frequency limits before opening or refreshing an opportunity, then the enrolled installation claims and displays any winner locally. The bundled scheduler remains disabled and cannot claim inventory. Automatic background delivery is follow-up work gated on install, restart, pause, upgrade, uninstall, credential-unlock, host-restart, sidebar, and sleep/wake tests from the scheduler's real environment. Covers R6, R24, R26.
+- KTD3. **Make a receiver-owned local scheduler the MVP cadence authority.** After one explicit opt-in, the local helper applies quiet hours and frequency limits before opening or refreshing an opportunity, then the enrolled installation claims and displays any winner locally. The background path is enabled only after install, restart, pause, upgrade, uninstall, credential-unlock, host-restart, sidebar, and sleep/wake tests pass from the scheduler's real environment. `ad-daddy check` exercises the same policy as a diagnostic and manual fallback. Covers R6, R24, R26.
 - KTD4. **Define one narrow host adapter contract.** An adapter accepts a signed placement, creates or finds a session by placement ID, applies the fixed `Sponsored ·` title prefix and Ad Daddy display instruction, starts the display turn once, verifies ordinary-sidebar visibility, and returns a receipt. Codex is the reference adapter; Claude Code remains behind a capability flag until the same sidebar contract is proven. Covers R8-R10.
 - KTD5. **Use a first-price sealed-bid auction for the closed beta.** Hard eligibility filters run before ranking, a short fixed window accepts bids, the highest valid bid wins, and ties resolve deterministically. Covers R7, R11, R14.
 - KTD6. **Interpret minimum price as receiver cash take-home and rank on cash.** The matcher derives the required gross cash bid from the active revenue split, which avoids presenting a price that is later reduced by the operator fee. Credits and discounts pass through at 100% as separately disclosed bonuses, do not substitute for a receiver's cash minimum, and do not increase auction rank; a credits-only campaign is eligible only when the receiver has explicitly enabled that reward lane without a cash minimum. Covers R3, R7, R11, R16, R18.
@@ -443,7 +445,7 @@ Profile data and financial history have different lifecycles. Expired targeting 
 - **Host instability:** each adapter is capability-versioned and falls back to a signed local HTML placement when native session creation is unavailable.
 - **Experimental host contract:** App Server remains an experimental Codex integration surface, so the closed beta pins tested host versions, fails closed on schema drift, and never upgrades a placement from fallback to native without a fresh capability probe.
 - **Ad fatigue:** the local client and server both enforce cadence; the stricter rule wins.
-- **Accidental background activation:** the MVP exposes only the explicit manual check, and disabled scheduler code cannot claim inventory. Any later background release must pass load, restart, upgrade, pause, removal, user-session keychain access, host restart, sidebar, and sleep/wake lifecycle tests before activation.
+- **Accidental background activation:** the scheduler defaults off and cannot claim inventory before explicit local opt-in plus a successful background capability receipt. Activation must pass load, restart, upgrade, pause, removal, user-session keychain access, host restart, sidebar, and sleep/wake lifecycle tests; pause or revoke stops the job before server consent changes.
 - **Refund race or trapped funds:** campaign closure rejects new bids, waits for authoritative reservations and holds, computes withdrawable balance in D1, and posts one idempotent refund transaction before the onchain transfer.
 - **Endpoint abuse or oversized creatives:** schemas cap bodies and collections before parsing expensive content, throttles apply at actor and resource boundaries, and rejected requests cannot advance lifecycle or ledger state.
 - **Credential compromise or stale signatures:** device and campaign credentials are revocable, signing keys carry key IDs and bounded overlap, secrets are environment-scoped, and security events invalidate active sessions or placements according to credential type.
@@ -576,29 +578,29 @@ Profile data and financial history have different lifecycles. Expired targeting 
 
 **Files:** `packages/ad-daddy-skill/SKILL.md`, `packages/ad-daddy-skill/references/setup.md`, `packages/ad-daddy-skill/references/privacy.md`, `packages/cli/src/commands/setup.ts`, `packages/cli/src/commands/profile.ts`, `packages/cli/src/commands/check.ts`, `packages/cli/src/device-key.ts`, `packages/cli/src/scheduler.ts`, `packages/cli/src/local-store.ts`, `packages/cli/src/install-integrity.ts`, `packages/device-key-helper/Package.swift`, `packages/device-key-helper/Sources/AdDaddyDeviceKey/main.swift`, `app/api/v1/installations/enrollment-grants/route.ts`, `app/api/v1/installations/enroll/route.ts`, `app/receiver/settings/page.tsx`, `public/AD-DADDY.md`, `tests/unit/profile-builder.test.ts`, `tests/unit/device-key.test.ts`, `tests/unit/scheduler.test.ts`, `tests/unit/install-integrity.test.ts`, `tests/integration/device-enrollment.test.ts`, `tests/integration/receiver-setup.test.ts`.
 
-**Approach:** Implement KTD1-KTD3. The setup skill asks for role first, presents grouped field controls, derives private-repository stacks locally, shows the exact outbound snapshot, captures versioned receiver terms and privacy consent, and requires explicit activation. On the initial macOS target, a bundled, signed Swift helper creates a non-exportable P-256 signing key through Security.framework with `kSecAttrIsExtractable: false`, stores its persistent keychain reference under an Ad Daddy application label, signs canonical SHA-256 request digests with the X9.62 digest form of ES256, and returns only the public JWK plus its RFC 7638 thumbprint to the Node CLI. CI and unsupported platforms use an explicit memory test provider and cannot claim production enrollment. A recent human approval creates a short-lived enrollment grant; the authenticated enrollment endpoint binds the public key, thumbprint, algorithm, installation, account, and key version durably in D1. Local configuration stores only the credential reference. The CLI is the authority for local secrets and profile policy. Hosted edits are pending proposals until the installation reviews and signs the new snapshot; hosted pause or revoke invalidates server consent immediately, after which local sync can only become equally or more restrictive. Every MVP fetch is an explicit `ad-daddy check` run by the receiver or their existing agent. Scheduler code remains fail-closed and is not installed or advertised until a later release passes the background capability gate from its actual environment.
+**Approach:** Implement KTD1-KTD3. The setup skill asks for role first, presents grouped field controls, derives private-repository stacks locally, shows the exact outbound snapshot, captures versioned receiver terms and privacy consent, and requires explicit activation. On the initial macOS target, a bundled, signed Swift helper creates a non-exportable P-256 signing key through Security.framework with `kSecAttrIsExtractable: false`, stores its persistent keychain reference under an Ad Daddy application label, signs canonical SHA-256 request digests with the X9.62 digest form of ES256, and returns only the public JWK plus its RFC 7638 thumbprint to the Node CLI. CI and unsupported platforms use an explicit memory test provider and cannot claim production enrollment. A recent human approval creates a short-lived enrollment grant; the authenticated enrollment endpoint binds the public key, thumbprint, algorithm, installation, account, and key version durably in D1. Local configuration stores only the credential reference. The CLI is the authority for local secrets and profile policy. Hosted edits are pending proposals until the installation reviews and signs the new snapshot; hosted pause or revoke invalidates server consent immediately, after which local sync can only become equally or more restrictive. After enrollment the user gets one explicit background opt-in. The installer previews the local job and activates it only after a capability probe from the real scheduler environment; that receiver-owned job performs scheduled device-bound pulls and creates a separate sponsored session when a signed offer clears. `ad-daddy check` remains the same policy path for diagnostics and manual fallback.
 
 **Test scenarios:**
 
 - A receiver selects project descriptions and public repositories, declines location and usage, and the published snapshot contains only the selected fields.
 - A private repository produces an allowlisted tech-stack summary while raw names, paths, remotes, code, and commits remain absent.
 - A receiver configures cash, credits, and discounts plus a $2.50 take-home minimum, and the local preview explains each value.
-- Receiver activation discloses the native display turn and selected host model when available before the receiver can run a manual check.
+- Receiver activation discloses the native display turn and selected host model when available before background delivery can be enabled.
 - Pausing prevents polling immediately and revokes every open opportunity for the prior consent version.
 - A missing payout address blocks cash activation but still permits credits-only campaigns.
 - Re-running setup edits the existing profile instead of creating a duplicate installation.
 - An agent can prepare a payout-address change, but the old address remains active until the receiver completes fresh passkey or wallet approval.
-- A manual check obeys quiet hours and frequency limits and coalesces simultaneous local checks into one poll.
-- Pausing revokes the server-side consent version before another manual check can claim inventory.
+- Scheduled and manual checks obey quiet hours and frequency limits and coalesce simultaneous local checks into one poll.
+- Pausing stops the local job before revoking the server-side consent version, so another scheduled check cannot claim inventory.
 - A one-time device enrollment cannot be replayed, expires unused, and never grants authority beyond the installation approved by the human account.
 - A fresh installation creates one operating-system credential, persists only its reference locally, and the server can verify its public thumbprint after either side restarts.
 - Enrollment accepts only ES256 P-256 public material from a live single-use human-approved grant, binds it to one account and installation, and rejects algorithm substitution, thumbprint mismatch, replay, expiry, or cross-account use.
 - A hosted profile edit remains pending until the enrolled installation signs it, while a hosted pause or revoke prevents new opportunities immediately even before the next local sync.
 - Installation aborts before enrollment when the pinned skill or CLI signature, checksum, origin, or version does not match.
-- No MVP setup path installs a background service or claims automatic delivery support.
-- Every supported installation can run the same receiver policy through the explicit manual check command.
+- Background delivery remains off until the receiver explicitly opts in and the real scheduler environment produces a valid capability receipt.
+- Every supported installation runs the same receiver policy through scheduled delivery and the explicit diagnostic check command.
 
-**Verification:** An agent can follow the HTTPS-served, versioned `public/AD-DADDY.md` to verify the installer and produce a valid receiver configuration with a redacted preview without reading product source code. A manual check proves enrolled-key access, receiver-pulled claim redemption, and local native task creation; automatic delivery remains unavailable.
+**Verification:** An agent can follow the HTTPS-served, versioned `public/AD-DADDY.md` to verify the installer and produce a valid receiver configuration with a redacted preview without reading product source code. One background opt-in proves enrolled-key access, scheduled receiver-pulled claim redemption, local native task creation without user-created sessions, restart recovery, and immediate stop on pause; a manual check proves the same path diagnostically.
 
 ### U3. Build advertiser setup, campaigns, and opportunity search
 
@@ -802,7 +804,7 @@ Profile data and financial history have different lifecycles. Expired targeting 
 - A real-money canary must use invite-listed accounts, per-human and per-installation reward-velocity caps, a per-placement cap, a per-campaign cap, an aggregate treasury-outflow ceiling, anomaly holds, an operator kill switch, and a documented rollback from production settlement to synthetic mode.
 - Closed-beta usability review must time receiver and advertiser setup against the five- and ten-minute targets and verify that at least 90% of tested receivers can identify the winning bid, take-home amount, and signals used.
 - Accessibility review must cover keyboard-only use, focus order, programmatic labels, non-color status meaning, contrast, reduced motion, screen-reader announcements, and mobile layouts across both roles and sponsored sessions.
-- The MVP review must verify that no setup path installs or advertises automatic delivery and that disabled scheduler code cannot claim inventory. A later background-delivery release must separately prove installation, restart, upgrade, pause, uninstall, keychain access, host restart, sidebar visibility, and sleep/wake behavior from the actual scheduler environment.
+- The MVP review must verify that background delivery defaults off, requires explicit local opt-in plus a valid capability receipt, and passes installation, restart, upgrade, pause, uninstall, keychain access, host restart, sidebar visibility, and sleep/wake behavior from the actual scheduler environment.
 - Refund review must race campaign closure against bids, reservations, holds, duplicate requests, chain retries, and address changes without trapping or over-refunding funds.
 
 ---
@@ -812,7 +814,7 @@ Profile data and financial history have different lifecycles. Expired targeting 
 - The HTTPS setup instruction and pinned signed installer work from a fresh Codex environment and produce reviewable role configuration.
 - The npm workspace and Cloudflare deployment topology build from a clean checkout, and the Codex display-turn feasibility gate passes before marketplace work begins.
 - Receivers can control every listed signal, take-home minimum, reward type, cadence, and pause state.
-- Receivers use an explicit manual check on every platform, and no MVP surface installs or claims automatic background delivery.
+- Receivers opt into background delivery once on a capability-verified platform; the local helper then polls and creates eligible sponsored sessions without receiver-created tasks, while the explicit check remains a diagnostic fallback.
 - Advertiser agents can activate funded campaigns, search rotating consented opportunities, and bid within hard limits.
 - One eligible auction produces one `Sponsored ·` session in the ordinary sidebar, one Ad Daddy-labeled display-only first response, and one host receipt without touching active work.
 - Every sponsored session begins with a receiver-device fetch and device-bound claim; the marketplace never holds host credentials or initiates host mutation, another installation cannot use the returned grant, and only a fresh signed creative redemption can precede local delivery.

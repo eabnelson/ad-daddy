@@ -281,7 +281,7 @@ function nativeDelivery(placement: SignedPlacement): LocalPlacementDeliveryResul
       placementId: placement.payload.placementId, receiverAccountId: "receiver_local", installationId: "install_local",
       signedPlacementSha256: digest(placement), status: "native", updatedAt: NOW.toISOString(),
       receipt: {
-        placementId: placement.payload.placementId, threadId: "thread_local", turnId: "turn_local", title: "Sponsored · Branch your database",
+        placementId: placement.payload.placementId, threadId: "thread_local", turnId: "turn_local", title: "AD DADDY: Branch your database",
         output: "Sponsored via Ad Daddy\nNeon — Branch your database", outputSha256: "a".repeat(64), advertiserDisplayName: "Neon",
         receiverAmountMinor: 500, currency: "USD", signalsUsed: ["TypeScript"], toolItemCount: 0, cliVersion: "0.146.1",
         userAgent: "Codex Desktop", model: "gpt-5.6-luna", isolatedCwd: "/tmp/ad-daddy", activeTaskIdBefore: "active",

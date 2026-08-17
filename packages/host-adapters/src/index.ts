@@ -1,5 +1,6 @@
 export const HOST_ADAPTER_PROTOCOL_VERSION = 1;
 
+export * from "./advertiser-content-policy.js";
 export * from "./codex-capability.js";
 export * from "./codex.js";
 export * from "./claude.js";

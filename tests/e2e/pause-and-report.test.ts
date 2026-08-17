@@ -31,7 +31,7 @@ test("report and block preserve the receipt, stop later ads, and expose only agg
 
   const handler = createPlacementReceiptHandler(repository, blocklist, events);
   const post = (action: string) => handler(new Request("https://ad-daddy.test/api/v1/placements/placement_1/receipt", {
-    method: "POST", headers: { "content-type": "application/json", "oai-authenticated-user-id": "receiver_1" }, body: JSON.stringify({ action }),
+    method: "POST", headers: { "content-type": "application/json", "x-ad-daddy-verified-account-id": "receiver_1" }, body: JSON.stringify({ action }),
   }), { params: Promise.resolve({ id: "placement_1" }) });
   assert.equal((await post("report")).status, 200);
   assert.equal((await post("block_advertiser")).status, 200);
@@ -85,7 +85,7 @@ test("a receiver action is serialized with an in-flight delivery and preserves i
   await repository.fallbackPutStarted;
   const action = createPlacementReceiptHandler(repository)(new Request("https://ad-daddy.test/api/v1/placements/placement_race/receipt", {
     method: "POST",
-    headers: { "content-type": "application/json", "oai-authenticated-user-id": "receiver_race" },
+    headers: { "content-type": "application/json", "x-ad-daddy-verified-account-id": "receiver_race" },
     body: JSON.stringify({ action: "hide" }),
   }), { params: Promise.resolve({ id: "placement_race" }) });
   await new Promise<void>((resolve) => setImmediate(resolve));

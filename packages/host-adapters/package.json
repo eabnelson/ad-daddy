@@ -4,7 +4,15 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./advertiser-content-policy": {
+      "types": "./dist/advertiser-content-policy.d.ts",
+      "default": "./dist/advertiser-content-policy.js"
+    },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "default": "./dist/contract.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

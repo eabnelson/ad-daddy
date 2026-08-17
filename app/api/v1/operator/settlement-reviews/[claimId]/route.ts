@@ -10,6 +10,7 @@ import {
   sponsorshipRequestRateLimit,
   type SponsorshipRuntime,
 } from "../../../../../../lib/marketplace/sponsorship-runtime.ts";
+import { verifiedAccountId } from "../../../../../../lib/auth/verified-request-identity.ts";
 
 const LIMITS = { maxBytes: 1_024, maxDepth: 2, maxCollectionItems: 4, maxStringLength: 32 } as const;
 
@@ -20,7 +21,7 @@ export function createSettlementReviewHandler(
 ) {
   return async function handle(request: Request, context: { params: Promise<{ claimId: string }> }): Promise<Response> {
     if (request.method !== "POST") return Response.json({ error: "method_not_allowed" }, { status: 405 });
-    const operatorAccountId = request.headers.get("oai-authenticated-user-id");
+    const operatorAccountId = verifiedAccountId(request);
     const operators = new Set((operatorAccountIds ?? await deployedOperators()).filter(Boolean));
     if (!operatorAccountId || !operators.has(operatorAccountId)) return Response.json({ error: "operator_authentication_required" }, { status: 403 });
     const limit = sponsorshipRequestRateLimit.check([`settlement-review-operator:${operatorAccountId}`]);

@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import { access, readFile } from "node:fs/promises";
+import test from "node:test";
+
+test("private team workspace makes the no-money sender and receiver loop self-serve", async () => {
+  const [page, experience] = await Promise.all([
+    readFile("app/team/page.tsx", "utf8"),
+    readFile("app/team/team-experience.tsx", "utf8"),
+  ]);
+  const source = `${page}\n${experience}`;
+  for (const phrase of [
+    "Private team mode", "No real money", "Anyone can send. Anyone can receive.",
+    "Invite code", "Ask your coordinator", "Send an ad", "Team points", "Set up my agent",
+    "Update my profile", "Show me matching ads", "Create an ad",
+    "Existing member token", "Open my workspace",
+  ]) assert.match(source, new RegExp(phrase, "i"));
+  assert.match(source, /setup --json/);
+  assert.match(source, /\/api\/team/);
+  assert.match(source, /\/ad-daddy\.md/);
+  assert.match(source, /localStorage/);
+  assert.match(source, /localStorage\.getItem\(STORAGE_KEY\)[\s\S]*commitSession/);
+  assert.match(source, /sessionRef\.current\?\.memberAccessToken !== activeToken/);
+  assert.match(source, /joinPendingRef\.current/);
+  assert.match(source, /disabled=\{joining\}/);
+  assert.match(source, /loads AD_DADDY_API_TOKEN from that local secret store/);
+  assert.doesNotMatch(source, /--token '\$\{session\.memberAccessToken\}'/);
+  const worker = await readFile("worker/index.ts", "utf8");
+  assert.match(worker, /D1TeamModeStore/);
+  assert.match(worker, /private_team_mode_is_development_only/);
+  await access("public/TEAM-MODE.md");
+});
+
+test("the Vercel app exposes the team page, durable API, and agent-readable markdown", async () => {
+  const [page, route, instructions, packageJson, rootPackage, vercelConfig, runbook] = await Promise.all([
+    readFile("apps/vercel/app/page.tsx", "utf8"),
+    readFile("apps/vercel/app/api/team/route.ts", "utf8"),
+    readFile("apps/vercel/app/ad-daddy.md/route.ts", "utf8"),
+    readFile("apps/vercel/package.json", "utf8"),
+    readFile("package.json", "utf8"),
+    readFile("vercel.json", "utf8"),
+    readFile("docs/VERCEL-TEAM-PROOF.md", "utf8"),
+  ]);
+  assert.match(page, /TeamPage/);
+  assert.match(route, /PostgresTeamModeStore/);
+  assert.match(route, /hosted_test/);
+  assert.match(route, /DATABASE_URL/);
+  assert.match(instructions, /export \{ GET \}/);
+  assert.match(packageJson, /"next"/);
+  assert.match(rootPackage, /"build:vercel": "npm run build --workspace @ad-daddy\/host-adapters && npm run build --workspace @ad-daddy\/vercel-web"/);
+  assert.deepEqual(JSON.parse(vercelConfig), {
+    $schema: "https://openapi.vercel.sh/vercel.json",
+    framework: "nextjs",
+    installCommand: "npm install",
+    buildCommand: "npm run build:vercel",
+    outputDirectory: "apps/vercel/.next",
+  });
+  assert.match(runbook, /distinct Neon branch[\s\S]*Preview[\s\S]*Production/i);
+  assert.match(runbook, /Vercel Toolbar[\s\S]*Off[\s\S]*immutable static file upload/i);
+});
+
+test("team setup document delegates recurring polling and task creation to the receiver agent", async () => {
+  const setup = await readFile("public/TEAM-MODE.md", "utf8");
+  for (const phrase of [
+    "no real money", "AD_DADDY_INVITE_CODE", "AD_DADDY_TEAM_KEY", "AD_DADDY_PRIVATE_TEAM_MODE=1",
+    "ad-daddy check", "recurring", "AD DADDY: <sponsor message>", "do not create the task manually",
+    "same private team", "hosted test", "local D1",
+  ]) assert.match(setup, new RegExp(phrase, "i"));
+});

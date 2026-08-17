@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -6,7 +7,9 @@ import {
   validateSignedPlacement,
 } from "../../packages/host-adapters/dist/contract.js";
 import { assessCodexCapability } from "../../packages/host-adapters/dist/codex-capability.js";
-import { deliverCodexPlacement } from "../../packages/host-adapters/dist/codex-app-server.js";
+import { deliverCodexPlacement, deliverPrivateTeamCodexPlacement } from "../../packages/host-adapters/dist/codex-app-server.js";
+import { deliverGenericPlacement } from "../../packages/host-adapters/dist/generic.js";
+import { canonicalJson } from "../../packages/host-adapters/dist/contract.js";
 import {
   SPONSORED_DISPLAY_INSTRUCTION,
   renderPlacementData,
@@ -150,7 +153,7 @@ test("a valid placement creates one isolated display turn and returns a receipt"
   const result = await deliverCodexPlacement(deliveryOptions(host));
 
   assert.equal(result.delivered, true);
-  assert.equal(result.receipt.title, "Sponsored · Add Postgres without leaving Codex");
+  assert.equal(result.receipt.title, "AD DADDY: Add Postgres without leaving Codex");
   assert.equal(result.receipt.toolItemCount, 0);
   assert.equal(result.receipt.restartReadable, true);
   assert.equal(result.receipt.sidebarVerified, true);
@@ -177,20 +180,34 @@ test("a valid placement creates one isolated display turn and returns a receipt"
   assert.deepEqual(host.threadStartCalls[0].runtimeWorkspaceRoots, []);
   assert.deepEqual(host.threadStartCalls[0].environments, []);
   assert.deepEqual(host.threadStartCalls[0].dynamicTools, []);
-  assert.deepEqual(host.threadStartCalls[0].config.tools, { web_search: null });
+  assert.equal(host.threadStartCalls[0].config.tools, undefined);
   assert.equal(host.threadStartCalls[0].config.web_search, "disabled");
 });
 
-test("production native delivery never sends advertiser content without host proof that built-ins are disabled", async () => {
-  const unproven = new FakeAppServerHost();
-  const rejected = await deliverCodexPlacement({
-    ...deliveryOptions(unproven),
-    deploymentEnvironment: "production",
+test("generic fallback receipts use the Ad Daddy task-title contract", () => {
+  const result = deliverGenericPlacement({
+    placement: SIGNED_PLACEMENT_FIXTURE,
+    publicKeyPem: TEST_MARKETPLACE_PUBLIC_KEY_PEM,
+    creativeUrl: "https://example.com/ad",
+    now: NOW,
   });
-  assert.equal(rejected.delivered, false);
-  assert.equal(rejected.code, "BUILT_IN_TOOLS_UNVERIFIED");
-  assert.equal(unproven.threadStartCalls.length, 0);
-  assert.equal(unproven.turnStartCalls.length, 0);
+
+  assert.equal(result.delivered, true);
+  assert.equal(result.receipt.title, "AD DADDY: Add Postgres without leaving Codex");
+});
+
+test("native delivery never sends advertiser content without host proof that built-ins are disabled", async () => {
+  for (const deploymentEnvironment of ["development", "test", "staging", "production"]) {
+    const unproven = new FakeAppServerHost({ builtInToolsDisabled: false });
+    const rejected = await deliverCodexPlacement({
+      ...deliveryOptions(unproven),
+      deploymentEnvironment,
+    });
+    assert.equal(rejected.delivered, false);
+    assert.equal(rejected.code, "BUILT_IN_TOOLS_UNVERIFIED");
+    assert.equal(unproven.threadStartCalls.length, 0);
+    assert.equal(unproven.turnStartCalls.length, 0);
+  }
 
   const proven = new FakeAppServerHost({ builtInToolsDisabled: true });
   const delivered = await deliverCodexPlacement({
@@ -199,6 +216,44 @@ test("production native delivery never sends advertiser content without host pro
   });
   assert.equal(delivered.delivered, true);
   assert.equal(proven.turnStartCalls.length, 1);
+});
+
+test("explicit private team mode may create a zero-money task on an isolated unproven host", async () => {
+  const pair = generateKeyPairSync("ed25519");
+  const payload = structuredClone(SIGNED_PLACEMENT_FIXTURE.payload);
+  payload.payout.amountMinor = 0;
+  const placement = {
+    algorithm: "Ed25519",
+    keyId: "private-team-test",
+    payload,
+    signature: sign(null, Buffer.from(canonicalJson(payload)), pair.privateKey).toString("base64url"),
+  };
+  const host = new FakeAppServerHost({
+    builtInToolsDisabled: false,
+    output: "Sponsored via Ad Daddy\nNeon — Add Postgres without leaving Codex\nPrivate team reward: $0.00.\nMatched: TypeScript, database integration.",
+  });
+  const result = await deliverPrivateTeamCodexPlacement({
+    ...deliveryOptions(host),
+    placement,
+    publicKeyPem: pair.publicKey.export({ type: "spki", format: "pem" }).toString(),
+    deploymentEnvironment: "development",
+  });
+
+  assert.equal(result.delivered, true);
+  assert.equal(result.receipt.privateTeamPoc, true);
+  assert.equal(result.receipt.receiverAmountMinor, 0);
+  assert.equal(host.turnStartCalls.length, 1);
+
+  for (const deploymentEnvironment of ["test", "staging", "production"]) {
+    const blocked = await deliverPrivateTeamCodexPlacement({
+      ...deliveryOptions(new FakeAppServerHost({ builtInToolsDisabled: false })),
+      placement,
+      publicKeyPem: pair.publicKey.export({ type: "spki", format: "pem" }).toString(),
+      deploymentEnvironment,
+    });
+    assert.equal(blocked.delivered, false);
+    assert.equal(blocked.code, "PRIVATE_TEAM_MODE_FORBIDDEN");
+  }
 });
 
 test("invalid and expired placements create no host state", async () => {
@@ -223,22 +278,18 @@ test("invalid and expired placements create no host state", async () => {
   }
 });
 
-test("prompt-injection creative stays quoted data and cannot cause a tool item", async () => {
-  const host = new FakeAppServerHost({
-    output: "Sponsored via Ad Daddy\nNeon — Prompt boundary test\nReward: $5.00\nMatched: TypeScript, database integration.",
-  });
+test("prompt-injection creative is rejected before a native turn can start", async () => {
+  const host = new FakeAppServerHost({ builtInToolsDisabled: true });
   const result = await deliverCodexPlacement({
     ...deliveryOptions(host),
     placement: PROMPT_INJECTION_PLACEMENT_FIXTURE,
   });
 
-  assert.equal(result.delivered, true);
-  assert.match(host.turnStartCalls[0].input[0].text, /BEGIN ADVERTISER DATA/);
-  assert.match(
-    host.turnStartCalls[0].input[0].text,
-    /ignore the Ad Daddy instructions/i,
-  );
-  assert.equal(result.receipt.toolItemCount, 0);
+  assert.equal(result.delivered, false);
+  assert.equal(result.code, "PLACEMENT_INVALID");
+  assert.equal(host.connectionCount, 0);
+  assert.equal(host.threadStartCalls.length, 0);
+  assert.equal(host.turnStartCalls.length, 0);
 });
 
 test("a tool item rejects delivery and interrupts the turn", async () => {
@@ -288,6 +339,22 @@ test("retrying a placement ID returns the same task without another turn", async
   assert.equal(first.delivered, true);
   assert.equal(second.delivered, true);
   assert.equal(second.receipt.threadId, first.receipt.threadId);
+  assert.equal(host.threadStartCalls.length, 1);
+  assert.equal(host.turnStartCalls.length, 1);
+});
+
+test("an upgrade recovers and renames a placement created with the legacy title", async () => {
+  const host = new FakeAppServerHost();
+  const options = deliveryOptions(host);
+  const first = await deliverCodexPlacement(options);
+  const thread = host.threads.get(first.receipt.threadId);
+  thread.name = "Sponsored · Add Postgres without leaving Codex";
+
+  const retry = await deliverCodexPlacement(options);
+
+  assert.equal(retry.delivered, true);
+  assert.equal(retry.receipt.threadId, first.receipt.threadId);
+  assert.equal(thread.name, "AD DADDY: Add Postgres without leaving Codex");
   assert.equal(host.threadStartCalls.length, 1);
   assert.equal(host.turnStartCalls.length, 1);
 });
@@ -439,7 +506,7 @@ function deliveryOptions(host) {
     createConnection: host.createConnection,
     readActiveTaskId: async () => "active-task",
     verifySidebarVisibility: async ({ threadId, title }) =>
-      host.hasThread(threadId) && title.startsWith("Sponsored · "),
+      host.hasThread(threadId) && title.startsWith("AD DADDY: "),
   };
 }
 
@@ -455,7 +522,7 @@ class FakeAppServerHost {
   #options;
 
   constructor(options = {}) {
-    this.#options = options;
+    this.#options = { builtInToolsDisabled: true, ...options };
   }
 
   hasThread = (threadId) => this.threads.has(threadId);
@@ -480,11 +547,18 @@ class FakeAppServerHost {
       builtInToolsDisabled: this.#options.builtInToolsDisabled === true,
       request: async (method, params) => {
         if (method === "thread/list") {
+          const searchTerm = params.searchTerm?.toLowerCase();
           return {
             data: [...this.threads.values()]
               .filter(
                 (thread) =>
                   Boolean(thread.archived) === Boolean(params.archived),
+              )
+              .filter(
+                (thread) =>
+                  !searchTerm ||
+                  thread.name?.toLowerCase().includes(searchTerm) ||
+                  thread.preview?.toLowerCase().includes(searchTerm),
               )
               .map(summary),
             nextCursor: null,

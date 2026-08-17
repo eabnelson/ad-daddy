@@ -1,3 +1,5 @@
+import { assertSafeAdvertiserDisplayText } from "@ad-daddy/host-adapters/advertiser-content-policy";
+
 import { signPlacement } from "./signing-keys.ts";
 import {
   SponsorshipClaimService,
@@ -188,14 +190,23 @@ export class D1SponsorshipClaimRepository implements SponsorshipClaimRepository 
     else {
       const creative = safeRecord(JSON.parse(text(row.creativeJson)));
       const issuedAt = this.#clock().toISOString();
+      const advertiserDisplayName = text(row.advertiserName);
+      const title = typeof creative.headline === "string" ? creative.headline.slice(0, 120) : "A sponsored tool for your project";
+      const body = typeof creative.body === "string" ? creative.body.slice(0, 4_000) : "Sponsored via Ad Daddy";
+      // Campaign rows are mutable operational state. Enforce the content
+      // boundary again immediately before marketplace signing so a corrupted
+      // or legacy row can never become trusted sponsored-session input.
+      assertSafeAdvertiserDisplayText(advertiserDisplayName);
+      assertSafeAdvertiserDisplayText(title);
+      assertSafeAdvertiserDisplayText(body);
       signedPlacement = signPlacement({
         protocolVersion: 1, placementId,
-        advertiser: { id: text(row.advertiserId), displayName: text(row.advertiserName) },
-        title: typeof creative.headline === "string" ? creative.headline.slice(0, 120) : "A sponsored tool for your project",
+        advertiser: { id: text(row.advertiserId), displayName: advertiserDisplayName },
+        title,
         contentReference: `${this.#creativeOrigin}/creative/${encodeURIComponent(placementId)}`,
         destinationUrl: text(row.destinationUrl), disclosure: "Sponsored",
         payout: { amountMinor: integer(row.receiverAmountMinor), currency: "USD" }, signalsUsed: stringArray(row.matchedSignalsJson, 20, 80),
-        creative: { body: typeof creative.body === "string" ? creative.body.slice(0, 4_000) : "Sponsored via Ad Daddy", attachments: [] },
+        creative: { body, attachments: [] },
         issuedAt, expiresAt: text(row.campaignEndsAt),
       }, this.#placementSigning);
       await this.#db.batch([

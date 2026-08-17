@@ -11,6 +11,8 @@ test("portable skill metadata and referenced setup files are complete", async ()
   assert.match(skill, /^---\nname: ad-daddy-skill\ndescription: .+\n---/);
   assert.match(skill, /receiver, advertiser, or both/i);
   assert.match(skill, /credits and discounts pass through at 100%/i);
+  assert.match(skill, /one-time background opt-in/i);
+  assert.doesNotMatch(skill, /manual-only delivery/i);
   assert.match(metadata, /\$ad-daddy-skill/);
 
   for (const reference of skill.matchAll(/\]\((references\/[^)]+)\)/g)) {

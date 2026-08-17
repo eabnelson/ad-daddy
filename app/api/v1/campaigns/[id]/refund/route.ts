@@ -1,12 +1,13 @@
 import { getCampaignRuntime, type CampaignRuntime } from "../../../../../../lib/marketplace/campaign-registry.ts";
 import { PAYMENT_REQUEST_LIMITS, parseBoundedJson, RequestLimitError } from "../../../../../../lib/http/request-limits.ts";
 import { getPaymentRuntime, type PaymentRuntime } from "../../../../../../lib/payments/runtime.ts";
+import { verifiedAccountId } from "../../../../../../lib/auth/verified-request-identity.ts";
 
 export function createRefundHandler(campaigns?: CampaignRuntime, injectedPayments?: PaymentRuntime) {
   return async function handle(request: Request, context: { params: Promise<{ id: string }> }): Promise<Response> {
     const payments = injectedPayments ?? await getPaymentRuntime();
     const campaignState = campaigns ?? await getCampaignRuntime();
-    const accountId = request.headers.get("oai-authenticated-user-id");
+    const accountId = verifiedAccountId(request);
     if (!accountId) return json(401, { error: "human_authentication_required" });
     const { id } = await context.params;
     const limit = payments.rateLimit.check([`refund-ip:${request.headers.get("cf-connecting-ip") ?? "unknown"}`, `refund-actor:${accountId}`, `refund-campaign:${id}`]);

@@ -1,15 +1,15 @@
 export default function Home() {
   return (
     <main className="launch-page">
-      <div className="launch-actions">
-        <a className="launch-instruction" href="/AD-DADDY.md">
-          <span>
-            tell your agent to get setup with <strong>Ad Daddy</strong> and start earning before you build
-          </span>
-          <i aria-hidden="true" />
-        </a>
-        <a className="launch-demo-link" href="/demo">Try the interactive demo <span aria-hidden="true">→</span></a>
-      </div>
+      <section className="launch-brand" aria-labelledby="launch-title">
+        <h1 id="launch-title">AD DADDY</h1>
+        <p>Earn while you build.</p>
+        <nav aria-label="Ad Daddy links">
+          <a href="/demo">Try the demo</a>
+          <a href="/team">Private team</a>
+          <a href="/AD-DADDY.md">Set up your agent</a>
+        </nav>
+      </section>
     </main>
   );
 }

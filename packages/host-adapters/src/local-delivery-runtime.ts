@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import {
   createCodexAppServerConnection,
   deliverCodexPlacement,
+  deliverPrivateTeamCodexPlacement,
   type CodexAppServerConnection,
   type CodexDeliveryReceipt,
 } from "./codex-app-server.js";
@@ -30,6 +31,7 @@ export interface AuthorizedCodexHostContext {
   createConnection: () => Promise<CodexAppServerConnection>;
   readActiveTaskId: () => Promise<string | null>;
   verifySidebarVisibility?: (input: { threadId: string; title: string }) => Promise<boolean>;
+  privateTeamPoc?: true;
 }
 
 export interface LocalDeliveryRecord {
@@ -46,6 +48,7 @@ export interface LocalDeliveryRecord {
   hostInstructionSourcesVerified?: boolean;
   hostInstructionSources?: string[];
   nativeFailureCode?: string;
+  nativeFailureReason?: string;
   fallbackOutputSha256?: string;
   receipt?: CodexDeliveryReceipt | GenericPlacementReceipt;
   displayedAt?: string;
@@ -225,7 +228,11 @@ export class CodexLocalDeliveryRuntime {
     // Never re-enter a task known to have loaded an unexpected instruction
     // source. The signed fallback is the only safe surface for this placement.
     if (record.nativeFailureCode !== "INSTRUCTION_SOURCE_LEAK") {
-      const native = await deliverCodexPlacement({
+      if (host.privateTeamPoc && (isClaimed || payload.payout.amountMinor !== 0)) {
+        throw new Error("Private team mode accepts direct zero-money placements only");
+      }
+      const deliverNative = host.privateTeamPoc ? deliverPrivateTeamCodexPlacement : deliverCodexPlacement;
+      const native = await deliverNative({
         placement: envelope.placement,
         publicKeyPem: this.#marketplacePublicKeyPem,
         isolatedCwd: host.isolatedCwd,
@@ -275,6 +282,7 @@ export class CodexLocalDeliveryRuntime {
       record = {
         ...record,
         nativeFailureCode: native.code,
+        nativeFailureReason: native.reason.slice(0, 500),
         updatedAt: new Date().toISOString(),
       };
       await this.#store.put(record);
@@ -316,9 +324,13 @@ export function environmentCodexHostAuthorization(input: {
   environment?: NodeJS.ProcessEnv;
   model?: string;
   deploymentEnvironment?: "development" | "test" | "staging" | "production";
+  privateTeamPoc?: boolean;
 }): (placement: ClearedPlacementEnvelope) => Promise<AuthorizedCodexHostContext> {
   const environment = input.environment ?? process.env;
   const deploymentEnvironment = input.deploymentEnvironment ?? deliveryEnvironment(environment.AD_DADDY_ENV);
+  if (input.privateTeamPoc && (environment.AD_DADDY_ENV !== "development" || deploymentEnvironment !== "development")) {
+    throw new Error("Private team mode requires an explicit development environment");
+  }
   return async () => {
     return {
       receiverAccountId: input.receiverAccountId,
@@ -326,6 +338,7 @@ export function environmentCodexHostAuthorization(input: {
       isolatedCwd: input.isolatedCwd,
       model: input.model,
       deploymentEnvironment,
+      ...(input.privateTeamPoc ? { privateTeamPoc: true as const } : {}),
       createConnection: () => createCodexAppServerConnection(),
       readActiveTaskId: async () => environment.CODEX_THREAD_ID ?? null,
     };
@@ -379,6 +392,7 @@ function assertDeliveryRecord(value: unknown): asserts value is LocalDeliveryRec
     (record.leaseId !== undefined && (typeof record.leaseId !== "string" || !record.leaseId)) ||
     (record.fallbackOutputSha256 !== undefined && !/^[a-f0-9]{64}$/.test(record.fallbackOutputSha256)) ||
     (record.displayedAt !== undefined && !Number.isFinite(Date.parse(record.displayedAt))) ||
+    (record.nativeFailureReason !== undefined && (typeof record.nativeFailureReason !== "string" || record.nativeFailureReason.length > 500)) ||
     !["pending", "native", "fallback"].includes(record.status ?? "") ||
     !Number.isFinite(Date.parse(record.updatedAt ?? ""))
   ) {

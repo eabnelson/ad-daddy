@@ -52,7 +52,8 @@ export type CodexDeliveryFailureCode =
   | "TURN_FAILED"
   | "EXISTING_TURN_INCOMPLETE"
   | "DISPLAY_OUTPUT_INVALID"
-  | "BUILT_IN_TOOLS_UNVERIFIED";
+  | "BUILT_IN_TOOLS_UNVERIFIED"
+  | "PRIVATE_TEAM_MODE_FORBIDDEN";
 
 export interface CodexDeliveryReceipt {
   placementId: string;
@@ -77,6 +78,8 @@ export interface CodexDeliveryReceipt {
   sidebarVerified: boolean;
   instructionSources: string[];
   budgetVersion: 1;
+  /** Proof-only local team tasks are never eligible for monetary settlement. */
+  privateTeamPoc?: true;
 }
 
 export type CodexDeliveryResult =
@@ -166,8 +169,26 @@ interface ThreadListPage {
   nextCursor?: string | null;
 }
 
-export async function deliverCodexPlacement(
+export function deliverCodexPlacement(
   options: DeliverCodexPlacementOptions,
+): Promise<CodexDeliveryResult> {
+  return deliverCodexPlacementInternal(options, false);
+}
+
+/**
+ * Private, no-money proof mode for a trusted team running the same repository.
+ * It keeps the isolated/read-only/no-network task contract, but does not claim
+ * that the host can prove every built-in tool is disabled.
+ */
+export function deliverPrivateTeamCodexPlacement(
+  options: DeliverCodexPlacementOptions,
+): Promise<CodexDeliveryResult> {
+  return deliverCodexPlacementInternal(options, true);
+}
+
+async function deliverCodexPlacementInternal(
+  options: DeliverCodexPlacementOptions,
+  privateTeamPoc: boolean,
 ): Promise<CodexDeliveryResult> {
   let payload;
   try {
@@ -181,6 +202,13 @@ export async function deliverCodexPlacement(
       return failure("PLACEMENT_INVALID", `${error.code}: ${error.message}`);
     }
     throw error;
+  }
+
+  if (privateTeamPoc && (options.deploymentEnvironment !== "development" || payload.payout.amountMinor !== 0)) {
+    return failure(
+      "PRIVATE_TEAM_MODE_FORBIDDEN",
+      "Private team mode requires an explicit development environment and accepts zero-money placements only.",
+    );
   }
 
   let activeTaskIdBefore: string | null;
@@ -204,15 +232,15 @@ export async function deliverCodexPlacement(
       error instanceof Error ? error.message : "Codex App Server is unavailable.",
     );
   }
-  if (options.deploymentEnvironment === "production" && connection.builtInToolsDisabled !== true) {
+  if (connection.builtInToolsDisabled !== true && !privateTeamPoc) {
     await connection.close();
     return failure(
       "BUILT_IN_TOOLS_UNVERIFIED",
-      "Production native delivery requires host-provided proof that every built-in tool is disabled.",
+      "Native delivery requires host-provided proof that every built-in tool is disabled.",
     );
   }
 
-  const title = `Sponsored · ${payload.title}`;
+  const title = `AD DADDY: ${payload.title}`;
   let thread: ThreadRecord | null = null;
   let instructionSources: string[] = [];
   let unexpectedInstructionSources: string[] = [];
@@ -224,8 +252,15 @@ export async function deliverCodexPlacement(
     if (options.existingHostIdentifiers) {
       thread = await readThread(connection, options.existingHostIdentifiers.threadId);
     } else {
-      const discovered = await findPlacementThread(connection, payload.placementId, title);
+      const discovered = await findPlacementThread(connection, payload.placementId);
       thread = discovered ? await readThread(connection, discovered.id) : null;
+    }
+    if (thread && thread.name !== title) {
+      await connection.request("thread/name/set", {
+        threadId: thread.id,
+        name: title,
+      });
+      thread = { ...thread, name: title };
     }
     let needsDisplayTurn = false;
     if (thread) {
@@ -482,6 +517,7 @@ export async function deliverCodexPlacement(
       sidebarVerified,
       instructionSources,
       budgetVersion: CODEX_DISPLAY_BUDGET_V1.version,
+      ...(privateTeamPoc ? { privateTeamPoc: true as const } : {}),
     },
   };
 }
@@ -490,7 +526,9 @@ function requiredDisplayFields(payload: PlacementPayload): readonly string[] {
   return [
     payload.advertiser.displayName,
     payload.title,
-    `${(payload.payout.amountMinor / 100).toFixed(2)}`,
+    ...(payload.nonCashReward
+      ? [`${payload.nonCashReward.amount}`, payload.nonCashReward.label]
+      : [`${(payload.payout.amountMinor / 100).toFixed(2)}`]),
     ...payload.signalsUsed,
   ];
 }
@@ -529,7 +567,10 @@ export async function createCodexAppServerConnection(
         title: "Ad Daddy sponsored display",
         version: options.clientVersion ?? "0.1.0",
       },
-      capabilities: null,
+      // runtimeWorkspaceRoots is required to prove the sponsored task has no
+      // inherited workspace, and App Server gates that field behind this
+      // explicit client capability.
+      capabilities: { experimentalApi: true },
     });
   } catch (error) {
     await rpc.close();
@@ -655,7 +696,6 @@ async function watchDisplayTurn(
 async function findPlacementThread(
   connection: CodexAppServerConnection,
   placementId: string,
-  title: string,
 ): Promise<ThreadRecord | null> {
   const markers = [
     `"placementId": "${placementId}"`,
@@ -664,7 +704,9 @@ async function findPlacementThread(
   for (const archived of [false, true]) {
     let cursor: string | null = null;
     do {
-      const page = await listThreadPage(connection, cursor, archived, title);
+      // The placement ID is stable across display-title changes, so retries
+      // can recover tasks created by an older adapter without duplicating them.
+      const page = await listThreadPage(connection, cursor, archived, placementId);
       const found = page.data.find((candidate) =>
         markers.some((marker) => candidate.preview?.includes(marker)),
       );
@@ -747,7 +789,6 @@ function toolFreeConfig(): Record<string, unknown> {
     project_doc_max_bytes: 0,
     project_doc_fallback_filenames: [],
     mcp_servers: {},
-    tools: { web_search: null },
     web_search: "disabled",
     apps: { _default: { enabled: false } },
     features: Object.fromEntries(

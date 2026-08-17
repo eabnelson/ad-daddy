@@ -18,7 +18,7 @@ test("settlement review requires two distinct allowlisted human operators", asyn
   const handler = createSettlementReviewHandler(runtime, new MemorySettlementReviewApprovalRepository(), ["operator_1", "operator_2"]);
   const context = { params: Promise.resolve({ claimId: "claim_1" }) };
   const request = (operator: string) => new Request("https://ad.daddy/api/v1/operator/settlement-reviews/claim_1", {
-    method: "POST", headers: { "content-type": "application/json", "oai-authenticated-user-id": operator },
+    method: "POST", headers: { "content-type": "application/json", "x-ad-daddy-verified-account-id": operator },
     body: JSON.stringify({ resolution: "released" }),
   });
 

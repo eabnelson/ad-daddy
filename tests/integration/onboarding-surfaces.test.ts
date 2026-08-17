@@ -68,7 +68,7 @@ test("authenticated receiver preview, pause, and revoke share the setup service"
   assert.equal(revoke.status, 200);
   assert.equal((await revoke.json() as { status: string }).status, "revoked");
 
-  const read = await handler(new Request("https://ad.daddy/api/receiver/settings", { headers: { "oai-authenticated-user-id": "account_receiver" } }));
+  const read = await handler(new Request("https://ad.daddy/api/receiver/settings", { headers: { "x-ad-daddy-verified-account-id": "account_receiver" } }));
   assert.equal(read.status, 200);
   assert.equal((await read.json() as { status: string }).status, "revoked");
 });
@@ -77,7 +77,7 @@ test("receiver settings reject unsigned, cross-account, oversized, and unsupport
   const store = new MemoryLocalStore();
   const handler = createReceiverSettingsHandler({ store, setup: new ReceiverSetupService(store) });
   assert.equal((await handler(new Request("https://ad.daddy/api/receiver/settings", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "intent=preview" }))).status, 401);
-  assert.equal((await handler(new Request("https://ad.daddy/api/receiver/settings", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "oai-authenticated-user-id": "account_receiver", origin: "https://evil.example" }, body: "intent=preview&cadenceMinutes=60" }))).status, 403);
+  assert.equal((await handler(new Request("https://ad.daddy/api/receiver/settings", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-ad-daddy-verified-account-id": "account_receiver", origin: "https://evil.example" }, body: "intent=preview&cadenceMinutes=60" }))).status, 403);
 
   const unsupported = await handler(receiverRequest(new URLSearchParams({ intent: "preview", cadenceMinutes: "60", injected: "true" })));
   assert.equal(unsupported.status, 400);
@@ -92,7 +92,7 @@ test("receiver settings reject unsigned, cross-account, oversized, and unsupport
 function receiverRequest(form: URLSearchParams, accountId = "account_receiver"): Request {
   return new Request("https://ad.daddy/api/receiver/settings", {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", "oai-authenticated-user-id": accountId },
+    headers: { "content-type": "application/x-www-form-urlencoded", "x-ad-daddy-verified-account-id": accountId },
     body: form.toString(),
   });
 }

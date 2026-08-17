@@ -1,5 +1,10 @@
 import type { PlacementPayload } from "@ad-daddy/host-adapters";
 import {
+  AdvertiserContentPolicyError,
+  assertSafeAdvertiserDisplayText,
+  hasForbiddenAdvertiserPromptPattern,
+} from "@ad-daddy/host-adapters/advertiser-content-policy";
+import {
   buildCreativeContentSecurityPolicy,
   validateCreativeUrl,
   type CreativeUrlPolicy,
@@ -32,15 +37,6 @@ export interface ValidatedCreative {
   attachmentUrls: readonly string[];
   contentSecurityPolicy: string;
 }
-
-const FORBIDDEN_PROMPT_PATTERNS = [
-  /\b(?:secret|credential|password|private[ -]?key|api[ _-]?key)\b/i,
-  /\b(?:process\.env|environment variable|\.env\b)/i,
-  /\b(?:curl|wget|invoke-webrequest)\b[^\n]{0,160}(?:\||>|-o\b)/i,
-  /\b(?:bash|sh|zsh|powershell|cmd\.exe)\b/i,
-  /\b(?:run|execute)\b[^\n]{0,80}\b(?:script|command|binary)\b/i,
-  /\b(?:disable|bypass|ignore)\b[^\n]{0,80}\b(?:security|approval|instruction|sandbox)\b/i,
-] as const;
 
 export function validateCreative(
   payload: PlacementPayload,
@@ -76,11 +72,13 @@ export function validateCreative(
 }
 
 function validateAdvertiserDisplayText(value: string): void {
-  if (/<\s*(?:script|iframe|object|embed|form|meta|base)\b/i.test(value)) {
-    throw new CreativePolicyError("UNSAFE_CREATIVE", "Executable or embedding markup is not allowed in ad copy");
-  }
-  if (FORBIDDEN_PROMPT_PATTERNS.some((pattern) => pattern.test(value))) {
-    throw new CreativePolicyError("UNSAFE_CREATIVE", "Advertiser display text requests privileged or executable behavior");
+  try {
+    assertSafeAdvertiserDisplayText(value);
+  } catch (error) {
+    if (error instanceof AdvertiserContentPolicyError) {
+      throw new CreativePolicyError("UNSAFE_CREATIVE", error.message);
+    }
+    throw error;
   }
 }
 
@@ -88,7 +86,7 @@ export function validateImplementationPrompt(
   prompt: string,
   policy: Pick<CreativeValidationPolicy, "approvedPackages" | "approvedPackageDomains">,
 ): void {
-  if (FORBIDDEN_PROMPT_PATTERNS.some((pattern) => pattern.test(prompt))) {
+  if (hasForbiddenAdvertiserPromptPattern(prompt)) {
     throw new CreativePolicyError(
       "UNSAFE_IMPLEMENTATION_PROMPT",
       "Implementation prompt requests privileged or executable behavior",

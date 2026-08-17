@@ -39,7 +39,7 @@ test("forged operator headers cannot credit deposits and funding requires an exa
     deposits, operatorEvents, memoSalt: "funding-route-test-salt",
     policy, rateLimit: new FixedWindowRateLimiter({ limit: 100, windowMs: 60_000, maxRetryAfterSeconds: 60 }),
   } as never, { campaigns } as never);
-  const prepared = await handler(request({ action: "prepare", campaignId: "campaign_secure", amountMinor: 10_000, expectedSender: SENDER }, { "oai-authenticated-user-id": "acct_advertiser" }));
+  const prepared = await handler(request({ action: "prepare", campaignId: "campaign_secure", amountMinor: 10_000, expectedSender: SENDER }, { "x-ad-daddy-verified-account-id": "acct_advertiser" }));
   assert.equal(prepared.status, 201);
   const preparedBody = await prepared.json() as { commitment: { memo: string } };
   const event = transfer(preparedBody.commitment.memo);

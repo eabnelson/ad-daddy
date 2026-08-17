@@ -36,7 +36,7 @@ export function deliverGenericPlacement(input: {
       receipt: Object.freeze({
         placementId: payload.placementId,
         surface: "signed-html" as const,
-        title: `Sponsored · ${payload.title}`,
+        title: `AD DADDY: ${payload.title}`,
         disclosure: "Sponsored via Ad Daddy" as const,
         creativeUrl: creativeUrl.toString(),
         measurement: Object.freeze({

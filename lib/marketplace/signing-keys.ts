@@ -5,7 +5,7 @@ import {
   validateSignedPlacement,
   type PlacementPayload,
   type SignedPlacement,
-} from "@ad-daddy/host-adapters";
+} from "@ad-daddy/host-adapters/contract";
 import {
   CredentialLifecycleService,
   type ManagedCredential,

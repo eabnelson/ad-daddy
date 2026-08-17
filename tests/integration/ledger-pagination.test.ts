@@ -18,7 +18,7 @@ test("ledger history uses account-scoped keyset pages without leaking another ac
   const handler = createLedgerHandler({ ledgerRepository: repository } as PaymentRuntime);
 
   const first = await handler(new Request("https://ad.daddy/api/v1/ledger?limit=1", {
-    headers: { "oai-authenticated-user-id": "account_1" },
+    headers: { "x-ad-daddy-verified-account-id": "account_1" },
   }));
   assert.equal(first.status, 200);
   const firstBody = await first.json() as { transactions: Array<{ transactionId: string; entries: Array<{ accountId: string }> }>; nextCursor: string };
@@ -27,7 +27,7 @@ test("ledger history uses account-scoped keyset pages without leaking another ac
   assert.ok(firstBody.nextCursor);
 
   const second = await handler(new Request(`https://ad.daddy/api/v1/ledger?limit=1&cursor=${encodeURIComponent(firstBody.nextCursor)}`, {
-    headers: { "oai-authenticated-user-id": "account_1" },
+    headers: { "x-ad-daddy-verified-account-id": "account_1" },
   }));
   const secondBody = await second.json() as { transactions: Array<{ transactionId: string }>; nextCursor: string | null };
   assert.deepEqual(secondBody.transactions.map((transaction) => transaction.transactionId), ["txn_old"]);

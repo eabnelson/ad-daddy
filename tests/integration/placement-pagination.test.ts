@@ -60,7 +60,7 @@ const authority: CampaignReportAuthority = {
 };
 
 function request(url: string, accountId: string) {
-  return new Request(url, { headers: { "oai-authenticated-user-id": accountId } });
+  return new Request(url, { headers: { "x-ad-daddy-verified-account-id": accountId } });
 }
 
 async function page(response: Response) {

@@ -21,7 +21,7 @@ export function renderPlacementData(payload: PlacementPayload): string {
         destinationUrl: payload.destinationUrl,
         advertiserAuthoredImplementationPrompt:
           payload.creative.implementationPrompt,
-        reward: {
+        reward: payload.nonCashReward ?? {
           amount: (payload.payout.amountMinor / 100).toFixed(2),
           currency: payload.payout.currency,
         },

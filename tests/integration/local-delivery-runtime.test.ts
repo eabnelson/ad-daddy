@@ -112,6 +112,37 @@ test("instruction isolation failure records one empty task and presents the sign
   }
 });
 
+test("unverified built-in tool isolation uses signed HTML without starting a native task", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ad-daddy-delivery-"));
+  try {
+    const host = new RuntimeHost({ builtInToolsDisabled: false });
+    let fallbackPresentations = 0;
+    const delivery = new CodexLocalDeliveryRuntime({
+      store: new JsonLocalDeliveryStateStore(join(directory, "deliveries.json")),
+      marketplacePublicKeyPem: TEST_MARKETPLACE_PUBLIC_KEY_PEM,
+      authorizeHost: async () => host.context(),
+      presentFallback: async (receipt) => {
+        fallbackPresentations += 1;
+        return {
+          verified: true,
+          displayedAt: NOW.toISOString(),
+          outputSha256: createHash("sha256").update(canonicalJson(receipt)).digest("hex"),
+        };
+      },
+    });
+
+    const result = await delivery.deliver(envelope(), NOW);
+
+    assert.equal(result.status, "fallback");
+    assert.equal(result.record.nativeFailureCode, "BUILT_IN_TOOLS_UNVERIFIED");
+    assert.equal(host.threadStartCount, 0);
+    assert.equal(host.turnStartCount, 0);
+    assert.equal(fallbackPresentations, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("writing fallback metadata is not a verified signed-HTML display and cannot produce a receipt", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ad-daddy-delivery-"));
   try {
@@ -310,16 +341,18 @@ class RuntimeHost {
   readonly #threads = new Map<string, RuntimeThread>();
   readonly #instructionSources: string[];
   readonly #output: string;
+  readonly #builtInToolsDisabled: boolean;
   threadStartCount = 0;
   turnStartCount = 0;
 
-  constructor(options: { instructionSources?: string[]; output?: string; seedCompletedThread?: boolean } = {}) {
+  constructor(options: { instructionSources?: string[]; output?: string; seedCompletedThread?: boolean; builtInToolsDisabled?: boolean } = {}) {
     this.#instructionSources = options.instructionSources ?? [];
     this.#output = options.output ?? "Sponsored via Ad Daddy\nNeon — Add Postgres without leaving Codex\nReward: $5.00\nMatched: TypeScript, database integration";
+    this.#builtInToolsDisabled = options.builtInToolsDisabled ?? true;
     if (options.seedCompletedThread) {
       this.#threads.set("sponsored-existing", {
         id: "sponsored-existing",
-        name: "Sponsored · Add Postgres without leaving Codex",
+        name: "AD DADDY: Add Postgres without leaving Codex",
         preview: this.#output,
         turns: [{
           id: "display-turn",
@@ -355,6 +388,7 @@ class RuntimeHost {
       cliVersion: "0.146.1",
       userAgent: "Codex Desktop/0.146.1 (local runtime test)",
       allowedInstructionSources: [],
+      builtInToolsDisabled: this.#builtInToolsDisabled,
       request: async <T>(method: string, value: unknown): Promise<T> => {
         const params = value as { threadId?: string; name?: string; input?: Array<{ text: string }>; archived?: boolean };
         if (method === "thread/list") {

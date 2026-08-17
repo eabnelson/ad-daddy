@@ -7,12 +7,13 @@ import {
   D1ApprovalCapabilityRepository,
   type ApprovalCapabilityRepository,
 } from "../../../../../lib/auth/approval-capability.ts";
+import { verifiedAccountId } from "../../../../../lib/auth/verified-request-identity.ts";
 
 type Clock = () => Date;
 
 export function createEnrollmentGrantHandler(service?: DurableDeviceEnrollmentService, clock: Clock = () => new Date(), approvals?: ApprovalCapabilityRepository) {
   return async function handle(request: Request): Promise<Response> {
-    const accountId = request.headers.get("oai-authenticated-user-id");
+    const accountId = verifiedAccountId(request);
     if (!accountId) return Response.json({ error: "human_authentication_required" }, { status: 401 });
     try {
       const body = await boundedJson(request) as Record<string, unknown>;

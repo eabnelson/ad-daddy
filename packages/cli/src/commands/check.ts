@@ -9,6 +9,7 @@ type CheckInput<Response> = {
   poll: (publishedFields: object, now: Date) => Promise<Response>;
   placementsToday?: number;
   now?: Date;
+  deliveryNow?: Date;
 };
 
 export function runManualCheck<Response, Delivery>(input: CheckInput<Response> & {
@@ -42,8 +43,11 @@ export async function runManualCheck<Response, Delivery>(input: CheckInput<Respo
     return { status: "skipped", reason: decision.reason } as const;
   }
   const response = await input.poll(config.publishedFields, now);
+  // A marketplace response is necessarily issued after the pre-request policy
+  // clock. Reusing `now` can reject a freshly signed placement as future-dated.
+  const deliveryNow = input.deliveryNow ?? (input.now ? input.now : new Date());
   const delivery = input.delivery
-    ? await input.delivery.deliver(response, now)
+    ? await input.delivery.deliver(response, deliveryNow)
     : undefined;
   await input.store.markCheckedIfCurrent(config.installationId, config.consentVersion, now.toISOString());
   return {

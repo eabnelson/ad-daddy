@@ -1,9 +1,10 @@
 import { getPaymentRuntime, type PaymentRuntime } from "../../../../lib/payments/runtime.ts";
+import { verifiedAccountId } from "../../../../lib/auth/verified-request-identity.ts";
 
 export function createLedgerHandler(injectedRuntime?: PaymentRuntime) {
   return async function handle(request: Request): Promise<Response> {
     const runtime = injectedRuntime ?? await getPaymentRuntime();
-    const accountId = request.headers.get("oai-authenticated-user-id");
+    const accountId = verifiedAccountId(request);
     if (!accountId) return Response.json({ error: "human_authentication_required" }, { status: 401 });
     const ownedAccounts = new Set([`receiver:${accountId}`, `advertiser:${accountId}`]);
     const url = new URL(request.url);

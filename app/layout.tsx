@@ -15,17 +15,15 @@ const mono = Space_Mono({
 
 export const metadata: Metadata = {
   title: "Ad Daddy",
-  description: "Tell your agent to get setup with Ad Daddy and start earning before you build.",
+  description: "Earn while you build.",
   openGraph: {
     title: "Ad Daddy",
-    description: "Earn before you build.",
-    images: [{ url: "/og.png", width: 1731, height: 909, alt: "Ad Daddy — Earn before you build." }],
+    description: "Earn while you build.",
   },
   twitter: {
-    card: "summary_large_image",
+    card: "summary",
     title: "Ad Daddy",
-    description: "Earn before you build.",
-    images: ["/og.png"],
+    description: "Earn while you build.",
   },
   icons: {
     icon: "/favicon.svg",

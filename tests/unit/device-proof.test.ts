@@ -178,7 +178,7 @@ test("changing any signed field, signature, or key thumbprint invalidates the pr
     { ...envelope, bodyDigest: "0".repeat(64) },
     { ...envelope, installationId: "installation_2" },
     { ...envelope, consentVersion: 8 },
-    { ...envelope, keyThumbprint: `${envelope.keyThumbprint.slice(0, -1)}A` },
+    { ...envelope, keyThumbprint: `${envelope.keyThumbprint.slice(0, -1)}${envelope.keyThumbprint.endsWith("A") ? "B" : "A"}` },
     { ...envelope, nonce: `${envelope.nonce}A` },
     { ...envelope, issuedAt: "2026-08-15T15:59:31.000Z" },
     { ...envelope, expiresAt: "2026-08-15T16:01:01.000Z" },

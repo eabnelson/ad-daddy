@@ -36,7 +36,7 @@ test("prepares one signed placement, uses the generic fallback, and exposes rece
 
   const handler = createPlacementReceiptHandler(repository);
   const receiptResponse = await handler(new Request("https://ad-daddy.test/api/v1/placements/pl_e2e_1/receipt", {
-    headers: { "oai-authenticated-user-id": "receiver_1" },
+    headers: { "x-ad-daddy-verified-account-id": "receiver_1" },
   }), { params: Promise.resolve({ id: "pl_e2e_1" }) });
   assert.equal(receiptResponse.status, 200);
   const receipt = await receiptResponse.json() as { advertiser: string; reward: { amountMinor: number }; controls: string[] };
@@ -46,14 +46,14 @@ test("prepares one signed placement, uses the generic fallback, and exposes rece
 
   const reportResponse = await handler(new Request("https://ad-daddy.test/api/v1/placements/pl_e2e_1/receipt", {
     method: "POST",
-    headers: { "content-type": "application/json", "oai-authenticated-user-id": "receiver_1" },
+    headers: { "content-type": "application/json", "x-ad-daddy-verified-account-id": "receiver_1" },
     body: JSON.stringify({ action: "report" }),
   }), { params: Promise.resolve({ id: "pl_e2e_1" }) });
   assert.equal(reportResponse.status, 200);
   assert.equal((await reportResponse.json() as { status: string }).status, "reported");
 
   const hiddenFromOtherUser = await handler(new Request("https://ad-daddy.test/api/v1/placements/pl_e2e_1/receipt", {
-    headers: { "oai-authenticated-user-id": "receiver_2" },
+    headers: { "x-ad-daddy-verified-account-id": "receiver_2" },
   }), { params: Promise.resolve({ id: "pl_e2e_1" }) });
   assert.equal(hiddenFromOtherUser.status, 404);
 });

@@ -44,7 +44,7 @@ test("human-authenticated grant enrolls one durable ES256 key and cannot replay"
 
   const grantResponse = await grantHandler(new Request("https://ad.daddy/api/v1/installations/enrollment-grants", {
     method: "POST",
-    headers: { "content-type": "application/json", "oai-authenticated-user-id": "account_1" },
+    headers: { "content-type": "application/json", "x-ad-daddy-verified-account-id": "account_1" },
     body: JSON.stringify({ installationId: "install_1", keyThumbprint: key.thumbprint, approvalId: "approval_device_1" }),
   }));
   assert.equal(grantResponse.status, 201);
@@ -84,7 +84,7 @@ test("caller-authored device approval data cannot mint an enrollment grant", asy
   const handler = createEnrollmentGrantHandler(service, () => NOW, approvals);
   const response = await handler(new Request("https://ad.daddy/api/v1/installations/enrollment-grants", {
     method: "POST",
-    headers: { "content-type": "application/json", "oai-authenticated-user-id": "account_1" },
+    headers: { "content-type": "application/json", "x-ad-daddy-verified-account-id": "account_1" },
     body: JSON.stringify({ installationId: "install_1", keyThumbprint: key.thumbprint, approval: APPROVAL, approvalId: "forged" }),
   }));
   assert.equal(response.status, 409);

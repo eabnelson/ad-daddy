@@ -1,5 +1,10 @@
 import { verify } from "node:crypto";
 
+import {
+  AdvertiserContentPolicyError,
+  assertSafeAdvertiserDisplayText,
+} from "./advertiser-content-policy.js";
+
 export type PlacementValidationCode =
   | "INVALID_PAYLOAD"
   | "INVALID_SIGNATURE"
@@ -39,6 +44,12 @@ export interface PlacementPayload {
   payout: {
     amountMinor: number;
     currency: "USD";
+  };
+  nonCashReward?: {
+    kind: "team_points";
+    amount: number;
+    label: "team points";
+    redeemable: false;
   };
   signalsUsed: string[];
   creative: {
@@ -159,6 +170,13 @@ function validatePayloadShape(placement: SignedPlacement): void {
     Number.isSafeInteger(payload.payout?.amountMinor) &&
     payload.payout.amountMinor >= 0 &&
     payload.payout.currency === "USD" &&
+    (payload.nonCashReward === undefined || (
+      payload.nonCashReward?.kind === "team_points" &&
+      Number.isSafeInteger(payload.nonCashReward.amount) &&
+      payload.nonCashReward.amount >= 0 &&
+      payload.nonCashReward.label === "team points" &&
+      payload.nonCashReward.redeemable === false
+    )) &&
     Array.isArray(payload.signalsUsed) &&
     payload.signalsUsed.length <= 20 &&
     payload.signalsUsed.every((signal) => bounded(signal, 1, 80)) &&
@@ -191,15 +209,30 @@ function validatePayloadShape(placement: SignedPlacement): void {
     );
   }
 
+  try {
+    assertSafeAdvertiserDisplayText(payload.advertiser.displayName);
+    assertSafeAdvertiserDisplayText(payload.title);
+    assertSafeAdvertiserDisplayText(payload.creative.body);
+    for (const attachment of attachments) {
+      assertSafeAdvertiserDisplayText(attachment.title);
+    }
+  } catch (error) {
+    if (error instanceof AdvertiserContentPolicyError) {
+      throw new PlacementValidationError("INVALID_PAYLOAD", error.message);
+    }
+    throw error;
+  }
+
 
   assertExactKeys(placement, ["algorithm", "keyId", "payload", "signature"]);
   assertExactKeys(payload, [
     "protocolVersion", "placementId", "advertiser", "title",
-    "contentReference", "destinationUrl", "disclosure", "payout",
+    "contentReference", "destinationUrl", "disclosure", "payout", "nonCashReward",
     "signalsUsed", "creative", "issuedAt", "expiresAt",
   ]);
   assertExactKeys(payload.advertiser, ["id", "displayName"]);
   assertExactKeys(payload.payout, ["amountMinor", "currency"]);
+  if (payload.nonCashReward) assertExactKeys(payload.nonCashReward, ["kind", "amount", "label", "redeemable"]);
   assertExactKeys(payload.creative, ["body", "implementationPrompt", "attachments"]);
   for (const attachment of attachments) {
     assertExactKeys(attachment, ["title", "url", "mediaType", "sizeBytes", "sha256"]);
