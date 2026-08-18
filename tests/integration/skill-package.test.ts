@@ -19,7 +19,7 @@ test("portable skill metadata and referenced setup files are complete", async ()
   assert.match(skill, /one combined confirmation/i);
   assert.match(skill, /receiver setup --confirm/);
   assert.match(skill, /receiving on by default/i);
-  assert.match(skill, /one-minute cadence/i);
+  assert.match(skill, /1, 5, 15, or 60 minutes/i);
   assert.match(skill, /heartbeat attached to the setup task/i);
   assert.match(skill, /not a standalone cron task/i);
   assert.doesNotMatch(skill, /accept-disclosure|accept-terms|accept-privacy/);
@@ -40,8 +40,12 @@ test("portable skill metadata and referenced setup files are complete", async ()
   assert.match(skill, /Build my profile/);
   assert.match(skill, /Get ads/);
   assert.match(skill, /Send an ad/);
-  assert.match(skill, /current authorized workspace/);
-  assert.match(skill, /receiver profile.*advertiser profile/i);
+  assert.match(skill, /authorizes the current workspace/);
+  assert.match(skill, /Anything you want removed\?/);
+  assert.match(skill, /50 starting points/i);
+  assert.match(skill, /1 point to queue an ad for one selected teammate/i);
+  assert.match(skill, /recipientMemberIds/);
+  assert.match(skill, /will appear on their next receiver checks/i);
   assert.match(metadata, /\$ad-daddy-skill/);
 
   for (const reference of skill.matchAll(/\]\((references\/[^)]+)\)/g)) {
@@ -58,7 +62,9 @@ test("portable skill metadata and referenced setup files are complete", async ()
       assert.match(referenceText, /use it once/i);
       assert.match(referenceText, /member capability is private/i);
       assert.match(referenceText, /receiving on by default/i);
-      assert.match(referenceText, /one-minute cadence/i);
+      assert.match(referenceText, /1, 5, 15, or 60 minutes/i);
+      assert.match(referenceText, /50 starting points/i);
+      assert.match(referenceText, /recipientMemberIds/);
     }
   }
 });

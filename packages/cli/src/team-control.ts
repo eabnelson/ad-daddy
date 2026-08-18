@@ -7,6 +7,7 @@ export interface TeamMemberContext {
   displayName: string;
   tags: string[];
   receivesAds: boolean;
+  pointsBalance: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -55,11 +56,11 @@ const ACTIONS = [
   { name: "profile.show", command: "team profile show", mutates: false },
   { name: "profile.update", command: "team profile update --confirm --input -", mutates: true, input: "displayName?, tags?, receivesAds? as JSON on stdin" },
   { name: "advertiser.show", command: "team advertiser show", mutates: false },
-  { name: "people.list", command: "team people list", mutates: false },
-  { name: "ads.browse", command: "team ads browse", mutates: false },
+  { name: "people.list", command: "team people list", mutates: false, input: "shows everyone currently available to receive" },
+  { name: "ads.browse", command: "team ads browse", mutates: false, input: "shows ads already queued for you" },
   { name: "ads.mine", command: "team ads mine", mutates: false },
-  { name: "ads.send", command: "team ads send --confirm --input -", mutates: true, input: "title, body, targetTags, points as JSON on stdin" },
-  { name: "receiver.setup", command: "team receiver setup", mutates: true, input: "preview with --cadence; activate with --confirm" },
+  { name: "ads.send", command: "team ads send --confirm --input -", mutates: true, input: "title, body, recipientMemberIds as JSON on stdin; costs 1 point per person" },
+  { name: "receiver.setup", command: "team receiver setup", mutates: true, input: "choose --cadence in minutes (1, 5, 15, or 60 are easy defaults); activate with --confirm" },
   { name: "receiver.pause", command: "team receiver pause --confirm", mutates: true },
   { name: "receiver.resume", command: "team receiver resume", mutates: true, input: "preview first; activate with --confirm" },
   { name: "check", command: "team check", mutates: false },
@@ -98,7 +99,7 @@ export async function runTeamControl(
     };
     await store.write(context);
     const next = member.receivesAds
-      ? "Run `ad-daddy team receiver setup --cadence 1` now to preview the receiver disclosure and activate one-minute sponsored-task checks."
+      ? "Choose how often to receive ads, then run `ad-daddy team receiver setup --cadence <MINUTES>`; use 1 minute when the human wants the fastest test."
       : "Receiving is off. If the human later chooses to receive sponsored tasks, run `ad-daddy team profile update --confirm --input -` and send the serialized changes through stdin.";
     return { member, origin, contextStored: true, next };
   }
@@ -134,7 +135,7 @@ export async function runTeamControl(
   }
   if (resource === "ads" && operation === "send") {
     requireConfirmation(flags, "team ads send");
-    const input = exactInput(await dependencies.readInput(), "team ad", ["title", "body", "targetTags", "points"]);
+    const input = exactInput(await dependencies.readInput(), "team ad", ["title", "body", "recipientMemberIds"]);
     return teamRequest(context.origin, context.memberToken, { ...input, action: "create_ad" }, dependencies.fetch);
   }
   if (resource === "receiver" && operation === "setup") {
@@ -284,6 +285,7 @@ function teamMember(value: unknown): TeamMemberContext {
     displayName: boundedString(record.displayName, "display name", 1, 60),
     tags: array(record.tags, "tags").map((tag) => boundedString(tag, "tag", 1, 32)),
     receivesAds: boolean(record.receivesAds, "receivesAds"),
+    pointsBalance: integer(record.pointsBalance, "pointsBalance", 0, 10_000),
     createdAt: isoDate(record.createdAt, "createdAt"),
     updatedAt: isoDate(record.updatedAt, "updatedAt"),
   };
@@ -317,8 +319,7 @@ function safeBrowse(value: unknown): { matches: Array<Record<string, unknown>> }
       const record = requireRecord(match, "team ad match");
       return {
         ...safeAdSummary(record, "team ad match"),
-        matchedTags: safeTags(record.matchedTags, "matchedTags"),
-        matchCount: integer(record.matchCount, "matchCount", 0, 20),
+        queuedForYou: boolean(record.queuedForYou, "queuedForYou"),
       };
     }),
   };
@@ -329,17 +330,12 @@ function safeAdSummary(value: unknown, name: string): Record<string, unknown> {
   if (record.rewardKind !== "team_points") throw new Error(`${name} rewardKind is invalid`);
   return {
     adId: boundedString(record.adId, "adId", 1, 128),
-    targetTags: safeTags(record.targetTags, "targetTags"),
-    points: integer(record.points, "points", 0, 10_000),
+    pointsPerRecipient: integer(record.pointsPerRecipient, "pointsPerRecipient", 1, 1),
+    recipientCount: integer(record.recipientCount, "recipientCount", 0, 24),
+    displayedCount: integer(record.displayedCount, "displayedCount", 0, 24),
     rewardKind: "team_points",
     createdAt: isoDate(record.createdAt, "createdAt"),
   };
-}
-
-function safeTags(value: unknown, name: string): string[] {
-  const values = array(value, name);
-  if (values.length > 20) throw new Error(`${name} has too many entries`);
-  return values.map((tag) => boundedString(tag, "tag", 1, 32));
 }
 
 function array(value: unknown, name: string): unknown[] {

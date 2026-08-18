@@ -11,7 +11,7 @@ test("private team workspace makes the no-money sender and receiver loop self-se
   for (const phrase of [
     "Private team mode", "No real money", "Anyone can send. Anyone can receive.",
     "Invite code", "Ask your coordinator", "Send an ad", "Team points", "Set up my agent",
-    "Update my profile", "Show me matching ads", "Create an ad",
+    "Update my profile", "Show my queued ads", "Create an ad",
     "Existing member token", "Open my workspace",
   ]) assert.match(source, new RegExp(phrase, "i"));
   assert.match(source, /setup --json/);
