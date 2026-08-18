@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -107,19 +107,36 @@ test("team CLI is a complete agent-first control plane with a private local capa
   };
 
   const actions = await command(["team", "actions"], env);
-  assert.deepEqual((actions.result as { actions: Array<{ name: string }> }).actions.map((action) => action.name), [
+  const actionCatalog = (actions.result as { actions: Array<{ name: string; command: string; input?: string }> }).actions;
+  assert.deepEqual(actionCatalog.map((action) => action.name), [
     "join", "status", "profile.show", "profile.update", "advertiser.show", "people.list",
     "ads.browse", "ads.mine", "ads.send", "receiver.setup", "receiver.pause", "receiver.resume", "check",
   ]);
+  const joinAction = actionCatalog.find((action) => action.name === "join");
+  assert.equal(joinAction?.command, "team join --url <COORDINATOR_URL> --invite-code <INVITE_CODE> --input -");
+  assert.equal(joinAction?.input, "displayName, tags, receivesAds as JSON on stdin");
+
+  const joinInput = JSON.stringify({ displayName: "Erik", tags: ["typescript", "postgres"], receivesAds: true });
+  await assert.rejects(
+    command(["team", "join", "--url", origin, "--invite-code", "unsafe'code;", "--json", joinInput], env),
+    /invite code must be 8-128 characters, start with a letter, number, or underscore/,
+  );
+  await assert.rejects(
+    command(["team", "join", "--url", origin, "--invite-code", "--invite1", "--json", joinInput], env),
+    /--invite-code requires a value/,
+  );
+  assert.equal(requests.length, 0, "unsafe invite codes must fail before contacting the coordinator");
 
   await assert.rejects(command(["team", "join", "--url", origin, "--invite-code", "iloveads", "--json", JSON.stringify({
     action: "status", displayName: "Erik", tags: ["typescript", "postgres"], receivesAds: true,
   })], env), /unsupported field: action/);
   assert.equal(requests.length, 0, "invalid join input must fail before contacting the coordinator");
 
-  const joined = await command(["team", "join", "--url", origin, "--invite-code", "iloveads", "--json", JSON.stringify({
-    displayName: "Erik", tags: ["typescript", "postgres"], receivesAds: false,
-  })], env);
+  const joined = await commandWithStdin(
+    ["team", "join", "--url", origin, "--invite-code", "iloveads", "--input", "-"],
+    env,
+    JSON.stringify({ displayName: "Erik", tags: ["typescript", "postgres"], receivesAds: false }),
+  );
   assert.equal((joined.result as { member: { id: string } }).member.id, member.id);
   assert.doesNotMatch(String(joined.result.next), /receiver setup/, "advertiser-only join must not recommend receiver activation");
   assert.equal(JSON.stringify(joined), JSON.stringify(joined).replace(/member\.private\.capability/g, ""), "member token must not be printed");
@@ -165,10 +182,7 @@ test("team CLI is a complete agent-first control plane with a private local capa
     host: "Codex", supported: true,
     reason: "This Codex task provides the active-task authorization required to prove a new sponsored task does not replace the current task.",
   });
-  await assert.rejects(command(["team", "receiver", "setup", "--confirm"], env), /explicit --accept-disclosure, --accept-terms, --accept-privacy acceptance/);
-  const receiver = await command([
-    "team", "receiver", "setup", "--confirm", "--accept-disclosure", "--accept-terms", "--accept-privacy",
-  ], env);
+  const receiver = await command(["team", "receiver", "setup", "--confirm"], env);
   assert.equal((receiver.result as { local: { installation: { status: string } } }).local.installation.status, "active");
   assert.equal(((await command(["team", "profile", "show"], env)).result as { receivesAds: boolean }).receivesAds, true,
     "successful receiver activation must opt an advertiser-only remote profile into receiving");
@@ -178,13 +192,9 @@ test("team CLI is a complete agent-first control plane with a private local capa
   assert.match(String(resumePreview.result.activationDisclosure), /separate sponsored session/);
   const unsupportedEnv: NodeJS.ProcessEnv = { ...env };
   delete unsupportedEnv.CODEX_THREAD_ID;
-  await assert.rejects(command([
-    "team", "receiver", "resume", "--confirm", "--accept-disclosure", "--accept-terms", "--accept-privacy",
-  ], unsupportedEnv), /Native receiver delivery is not supported in this host yet/);
+  await assert.rejects(command(["team", "receiver", "resume", "--confirm"], unsupportedEnv), /Native receiver delivery is not supported in this host yet/);
   assert.equal(((await command(["team", "profile", "show"], env)).result as { receivesAds: boolean }).receivesAds, false);
-  await command([
-    "team", "receiver", "resume", "--confirm", "--accept-disclosure", "--accept-terms", "--accept-privacy",
-  ], env);
+  await command(["team", "receiver", "resume", "--confirm"], env);
 
   const authorized = requests.filter((request) => request.body.action !== "join");
   assert.ok(authorized.length > 0);
@@ -240,7 +250,7 @@ test("receiver pause and resume compensate the other side when synchronization f
     throw new Error(`unexpected action ${body.action}`);
   };
   await assert.rejects(runTeamControl({
-    values: new Map(), boolean: new Set(["confirm", "accept-disclosure", "accept-terms", "accept-privacy"]),
+    values: new Map(), boolean: new Set(["confirm"]),
     positionals: ["receiver", "resume"],
   }, {
     env: { ...process.env }, contextPath, fetch: failingResumeFetch as typeof globalThis.fetch, readInput: noop,
@@ -408,4 +418,24 @@ async function command(args: string[], env: NodeJS.ProcessEnv): Promise<{ comman
     const parsed = JSON.parse(failure.stderr ?? "{}") as { error?: string };
     throw new Error(parsed.error ?? "CLI command failed");
   }
+}
+
+async function commandWithStdin(args: string[], env: NodeJS.ProcessEnv, input: string): Promise<{ command: string; result: Record<string, unknown> }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cli, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      const parsed = JSON.parse(code === 0 ? stdout : stderr) as {
+        ok?: boolean; command?: string; result?: Record<string, unknown>; error?: string;
+      };
+      if (code !== 0) { reject(new Error(parsed.error ?? "CLI command failed")); return; }
+      assert.equal(parsed.ok, true);
+      resolve({ command: parsed.command!, result: parsed.result! });
+    });
+    child.stdin.end(input);
+  });
 }

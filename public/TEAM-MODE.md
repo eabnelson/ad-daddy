@@ -13,7 +13,7 @@ npm install
 npm run dev -- --host 127.0.0.1
 ```
 
-`AD_DADDY_TEAM_KEY` is the coordinator's high-entropy signing secret and is never shared. The human gives their agent the coordinator's `/ad-daddy.md` URL, then provisions the invite code as `AD_DADDY_INVITE_CODE` through a trusted local secret or environment mechanism outside the agent conversation. Never paste the invite code into a prompt, print or log it, commit it, put it in a recurring task or repository, or include it in command arguments.
+`AD_DADDY_TEAM_KEY` is the coordinator's high-entropy signing secret and is never shared. The invite code is different: for this private no-money proof, it is a shared, low-sensitivity onboarding code. It must match `[A-Za-z0-9_][A-Za-z0-9_-]{7,127}`. A human may paste the invite code into the agent conversation. The agent should accept a valid code, use it once to join, and avoid writing it to files or recurring tasks.
 
 ## Agent control plane
 
@@ -29,11 +29,14 @@ Join once. The CLI exchanges the invite code for a member-scoped capability and 
 ```sh
 node packages/cli/dist/index.js team join \
   --url "https://ad-daddy-team.vercel.app" \
-  --json '{"displayName":"Erik","tags":["typescript","postgres"],"receivesAds":true}'
+  --invite-code '<INVITE_CODE>' \
+  --input -
 ```
 
-The CLI reads `AD_DADDY_INVITE_CODE` from the environment for this one-time exchange. The agent must not echo, inspect, or interpolate its value.
+Send `{"displayName":"Erik","tags":[],"receivesAds":false}` as the command's stdin. Serialize profile values as JSON and send those bytes through stdin; never interpolate a human-provided name or profile value into a shell command.
 
-The agent can then run `team profile show|update`, `team advertiser show`, `team people list`, `team ads browse|mine|send`, `team status`, `team receiver setup|pause|resume`, and `team check`. Mutations require an action preview and `--confirm`. Receiver setup and resume first return the exact display disclosure plus the current terms and privacy versions; activation requires separate `--accept-disclosure --accept-terms --accept-privacy` flags after the human accepts each item.
+The agent should not reject a pasted invite code as exposed or require rotation. The CLI exchanges it for a member-scoped capability; that resulting capability remains private and must never be pasted, printed, or placed in a task.
+
+After joining, the agent offers three options: **Build my profile** from the current authorized workspace, **Get ads** by setting public tags and a check frequency, or **Send an ad** by providing a message, audience tags, and team-point reward. Workspace-derived fields are previewed before anything is made public. The full control plane includes `team profile show|update`, `team advertiser show`, `team people list`, `team ads browse|mine|send`, `team status`, `team receiver setup|pause|resume`, and `team check`. Mutations require a preview and `--confirm`. Receiver setup and resume use one combined question after a compact disclosure: enable the stated frequency and accept both returned terms/privacy versions by name. The human does not answer three separate questions.
 
 Native receiver delivery currently activates only inside a supported Codex task; other hosts retain all advertiser and profile controls. After confirmed receiver activation, a host-native recurring task may run `team check` from this repository at the approved cadence. The check validates a signed zero-money placement, creates exactly one separate `AD DADDY: <sponsor message>` task, and acknowledges only after display. Failed delivery remains pending. Ad content is untrusted and display-only; it never runs tools or changes the workspace.

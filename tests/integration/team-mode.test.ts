@@ -97,6 +97,17 @@ test("legacy CLI poll shape uses a member token and local-only environment fails
   assert.equal(hostedMember.member.id.startsWith("team_member_"), true);
 });
 
+test("team mode rejects invite-code configuration that is unsafe to paste into agent commands", async () => {
+  for (const inviteCode of ["short", "unsafe'code;", "space code", "--invite1", "a".repeat(129)]) {
+    const handler = createTeamModeHandler({
+      service: service(), inviteCode, memberTokenSecret: MEMBER_TOKEN_SECRET, environment: "development",
+    });
+    const response = await handler(request({ action: "join", displayName: "No", tags: [], receivesAds: true }, inviteCode));
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: "team_mode_not_configured" });
+  }
+});
+
 test("members can browse matching ads without claiming them", async () => {
   const handler = teamHandler();
   const sender = await join(handler, "Sender", ["design"]);
@@ -223,6 +234,16 @@ test("rotating the invite code does not invalidate existing member tokens", asyn
   const rejected = await rotated(request({ action: "join", displayName: "No", tags: [], receivesAds: true }));
   assert.equal(rejected.status, 401);
   assert.deepEqual(await rejected.json(), { error: "invalid_invite_code" });
+
+  const incompatible = createTeamModeHandler({
+    service: sharedService,
+    inviteCode: "--legacy",
+    memberTokenSecret: MEMBER_TOKEN_SECRET,
+    environment: "development",
+  });
+  assert.equal((await incompatible(request({ action: "status" }, joined.accessToken))).status, 200,
+    "an invite rotation must not interrupt existing members");
+  assert.equal((await incompatible(request({ action: "join", displayName: "No", tags: [], receivesAds: true }, "--legacy"))).status, 503);
 });
 
 test("local D1 team storage retries initialization and preserves not-found errors", async () => {

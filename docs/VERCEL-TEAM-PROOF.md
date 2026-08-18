@@ -14,7 +14,7 @@ This deployment is a private test network with no real money. Vercel hosts one s
    npm run team:secrets
    ```
 
-5. Set `AD_DADDY_INVITE_CODE` to the private code shared by the coordinator for Preview and Production. Generate **different high-entropy `AD_DADDY_TEAM_KEY` values** for Preview and Production; this secret signs member tokens and is never shared. Never publish either value or expose the Production token or placement signing keys to Preview deployments.
+5. Set `AD_DADDY_INVITE_CODE` to the private code shared by the coordinator for Preview and Production. It must match `[A-Za-z0-9_][A-Za-z0-9_-]{7,127}`; rotate an older incompatible value before deploying, while existing members continue to work during rotation. Generate **different high-entropy `AD_DADDY_TEAM_KEY` values** for Preview and Production; this secret signs member tokens and is never shared. Never publish either value or expose the Production token or placement signing keys to Preview deployments.
 6. Deploy. The first API request creates only the `team_mode_v2_*` proof tables in the connected database.
 7. Verify:
 

@@ -74,6 +74,18 @@ test("team setup document delegates recurring polling and task creation to the r
     "team profile", "team advertiser", "team people", "team ads", "team check", "recurring",
     "AD DADDY: <sponsor message>", "optional diagnostic workspace", "local coordinator",
   ]) assert.match(setup, new RegExp(phrase, "i"));
+  assert.match(setup, /may paste.*invite code.*conversation/i);
+  assert.ok(setup.includes("[A-Za-z0-9_][A-Za-z0-9_-]{7,127}"));
+  assert.match(setup, /use it once/i);
+  assert.match(setup, /member-scoped capability.*remains private/i);
+  assert.match(setup, /one combined question/i);
+  assert.match(setup, /Build my profile/);
+  assert.match(setup, /Get ads/);
+  assert.match(setup, /Send an ad/);
+  assert.doesNotMatch(setup, /accept-disclosure|accept-terms|accept-privacy/);
   assert.doesNotMatch(setup, /paste.*member.*token/i);
-  assert.doesNotMatch(setup, /--invite-code/);
+  assert.match(setup, /--invite-code/);
+  assert.match(setup, /--input -/);
+  assert.match(setup, /send those bytes through stdin/i);
+  assert.doesNotMatch(setup, /--json/);
 });

@@ -46,9 +46,11 @@ export AD_DADDY_TEAM_KEY="$(openssl rand -hex 24)"
 npm run dev -- --host 127.0.0.1
 ```
 
-Share the coordinator's `/ad-daddy.md` URL and invite code. Keep
-`AD_DADDY_TEAM_KEY` private because it signs member capabilities. Anyone who
-joins can send and receive ads; rewards are non-redeemable team points. The
+Share the coordinator's `/ad-daddy.md` URL and low-sensitivity test invite code
+directly with the agent. Invite codes are 8–128 characters, begin with a letter,
+number, or underscore, and otherwise use only those characters or hyphens. Keep `AD_DADDY_TEAM_KEY` private
+because it signs member capabilities. Anyone who joins can send and receive ads;
+rewards are non-redeemable team points. The
 local D1 database preserves the network across restarts. The agent uses the
 `ad-daddy team` control plane to join, manage profiles, find people, browse or
 send ads, and configure recurring polling. Full instructions:

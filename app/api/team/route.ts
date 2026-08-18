@@ -4,6 +4,7 @@ import { MemoryTeamModeStore, TeamModeInfrastructureError, TeamModeNotFoundError
 import { TEAM_MODE_KEY_ID, TEAM_MODE_PRIVATE_KEY_PEM, TEAM_MODE_PUBLIC_KEY_PEM } from "../../../lib/team-mode/signing-key.ts";
 
 const MAX_BODY_BYTES = 16_384;
+const INVITE_CODE_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_-]{7,127}$/;
 
 interface TeamModeRuntime {
   service: TeamModeService;
@@ -28,7 +29,7 @@ export function createTeamModeHandler(runtime: TeamModeRuntime = {
     if (runtime.environment !== "development" && runtime.environment !== "hosted_test") {
       return json(404, { error: "private_team_mode_is_test_only" });
     }
-    if (!runtime.inviteCode || runtime.inviteCode.length < 8 || !runtime.memberTokenSecret || runtime.memberTokenSecret.length < 16) {
+    if (!runtime.memberTokenSecret || runtime.memberTokenSecret.length < 16) {
       return json(503, { error: "team_mode_not_configured" });
     }
     let body: Record<string, unknown>;
@@ -36,6 +37,7 @@ export function createTeamModeHandler(runtime: TeamModeRuntime = {
     catch (error) { return json(400, { error: "invalid_team_request", message: message(error) }); }
     try {
       if (body.action === "join") {
+        if (!runtime.inviteCode || !INVITE_CODE_PATTERN.test(runtime.inviteCode)) return json(503, { error: "team_mode_not_configured" });
         if (!authorizeInvite(request, runtime.inviteCode)) return json(401, { error: "invalid_invite_code" });
         const joined = await runtime.service.join({ displayName: body.displayName, tags: body.tags, receivesAds: body.receivesAds });
         return json(201, {

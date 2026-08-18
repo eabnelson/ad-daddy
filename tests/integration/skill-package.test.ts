@@ -16,18 +16,42 @@ test("portable skill metadata and referenced setup files are complete", async ()
   assert.match(skill, /people\.list|people list/i);
   assert.match(skill, /ads\.send|ads send/i);
   assert.match(skill, /receiver\.setup|receiver setup/i);
-  assert.match(skill, /--accept-disclosure --accept-terms --accept-privacy/);
+  assert.match(skill, /one combined confirmation/i);
+  assert.match(skill, /receiver setup --confirm/);
+  assert.doesNotMatch(skill, /accept-disclosure|accept-terms|accept-privacy/);
   assert.match(skill, /supported only from a Codex task/i);
   assert.match(skill, /browser/i);
-  assert.match(skill, /AD_DADDY_INVITE_CODE/);
-  assert.doesNotMatch(skill, /--invite-code/);
+  assert.match(skill, /may paste.*invite code.*conversation/i);
+  assert.match(skill, /--invite-code/);
+  assert.match(skill, /--invite-code <INVITE_CODE> --input -/);
+  assert.match(skill, /--input -/);
+  assert.match(skill, /profile JSON through stdin/i);
+  assert.match(skill, /never interpolate human-provided profile values into a shell command/i);
+  assert.ok(skill.includes("[A-Za-z0-9_][A-Za-z0-9_-]{7,127}"));
+  assert.match(skill, /use it once/i);
+  assert.match(skill, /write it to files or recurring tasks/i);
+  assert.match(skill, /member capability.*private/i);
+  assert.match(skill, /Build my profile/);
+  assert.match(skill, /Get ads/);
+  assert.match(skill, /Send an ad/);
+  assert.match(skill, /current authorized workspace/);
+  assert.match(skill, /receiver profile.*advertiser profile/i);
   assert.match(metadata, /\$ad-daddy-skill/);
 
   for (const reference of skill.matchAll(/\]\((references\/[^)]+)\)/g)) {
     const referenceUrl = new URL(reference[1], skillRoot);
     await access(referenceUrl);
     const referenceText = await readFile(referenceUrl, "utf8");
-    assert.doesNotMatch(referenceText, /--invite-code/);
+    if (reference[1].endsWith("setup.md")) {
+      assert.match(referenceText, /may paste.*invite code.*conversation/i);
+      assert.match(referenceText, /--invite-code/);
+      assert.match(referenceText, /--invite-code <INVITE_CODE> --input -/);
+      assert.match(referenceText, /--input -/);
+      assert.match(referenceText, /profile JSON through stdin/i);
+      assert.ok(referenceText.includes("[A-Za-z0-9_][A-Za-z0-9_-]{7,127}"));
+      assert.match(referenceText, /use it once/i);
+      assert.match(referenceText, /member capability is private/i);
+    }
   }
 });
 

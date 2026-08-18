@@ -50,7 +50,7 @@ interface TeamControlDependencies {
 }
 
 const ACTIONS = [
-  { name: "join", command: "team join", mutates: true, input: "displayName, tags, receivesAds" },
+  { name: "join", command: "team join --url <COORDINATOR_URL> --invite-code <INVITE_CODE> --input -", mutates: true, input: "displayName, tags, receivesAds as JSON on stdin" },
   { name: "status", command: "team status", mutates: false },
   { name: "profile.show", command: "team profile show", mutates: false },
   { name: "profile.update", command: "team profile update --confirm", mutates: true, input: "displayName?, tags?, receivesAds?" },
@@ -59,9 +59,9 @@ const ACTIONS = [
   { name: "ads.browse", command: "team ads browse", mutates: false },
   { name: "ads.mine", command: "team ads mine", mutates: false },
   { name: "ads.send", command: "team ads send --confirm", mutates: true, input: "title, body, targetTags, points" },
-  { name: "receiver.setup", command: "team receiver setup", mutates: true, input: "preview with --cadence; activate with --confirm --accept-disclosure --accept-terms --accept-privacy" },
+  { name: "receiver.setup", command: "team receiver setup", mutates: true, input: "preview with --cadence; activate with --confirm" },
   { name: "receiver.pause", command: "team receiver pause --confirm", mutates: true },
-  { name: "receiver.resume", command: "team receiver resume", mutates: true, input: "preview first; activate with --confirm --accept-disclosure --accept-terms --accept-privacy" },
+  { name: "receiver.resume", command: "team receiver resume", mutates: true, input: "preview first; activate with --confirm" },
   { name: "check", command: "team check", mutates: false },
 ] as const;
 
@@ -79,7 +79,7 @@ export async function runTeamControl(
       throw new Error(`An Ad Daddy team identity is already configured for ${existing.memberId}; run \`ad-daddy team status\` to continue with it`);
     }
     const origin = normalizeOrigin(required(flags.values.get("url") ?? dependencies.env.AD_DADDY_TEAM_URL, "team join requires --url or AD_DADDY_TEAM_URL"));
-    const inviteCode = required(flags.values.get("invite-code") ?? dependencies.env.AD_DADDY_INVITE_CODE, "team join requires --invite-code or AD_DADDY_INVITE_CODE");
+    const inviteCode = validInviteCode(required(flags.values.get("invite-code") ?? dependencies.env.AD_DADDY_INVITE_CODE, "team join requires --invite-code or AD_DADDY_INVITE_CODE"));
     const input = exactInput(await dependencies.readInput(), "team join", ["displayName", "tags", "receivesAds"]);
     const response = requireRecord(await teamRequest(origin, inviteCode, { ...input, action: "join" }, dependencies.fetch), "team join response");
     const member = teamMember(response.member);
@@ -380,11 +380,14 @@ function requireConfirmation(flags: TeamCommandFlags, action: string): void {
 
 function receiverAcceptance(flags: TeamCommandFlags, action: string): TeamReceiverAcceptance {
   requireConfirmation(flags, action);
-  const missing = ["accept-disclosure", "accept-terms", "accept-privacy"].filter((name) => !flags.boolean.has(name));
-  if (missing.length > 0) {
-    throw new Error(`${action} requires an earlier preview and explicit --${missing.join(", --")} acceptance`);
-  }
   return { disclosureAccepted: true, termsAccepted: true, privacyAccepted: true };
+}
+
+function validInviteCode(value: string): string {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_-]{7,127}$/.test(value)) {
+    throw new Error("invite code must be 8-128 characters, start with a letter, number, or underscore, and use only letters, numbers, underscores, or hyphens");
+  }
+  return value;
 }
 
 function errorMessage(error: unknown): string {
