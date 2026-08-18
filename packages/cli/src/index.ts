@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -562,4 +563,4 @@ async function writeFallbackReceipt(path: string, receipt: GenericPlacementRecei
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
-if (invokedPath && resolve(fileURLToPath(import.meta.url)) === invokedPath) process.exitCode = await runCli(process.argv.slice(2));
+if (invokedPath && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(invokedPath)) process.exitCode = await runCli(process.argv.slice(2));

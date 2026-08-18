@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const execute = promisify(execFile);
-const cli = fileURLToPath(new URL("../../packages/cli/dist/index.js", import.meta.url));
+const cli = fileURLToPath(new URL("../../node_modules/.bin/ad-daddy", import.meta.url));
 
 test("installed ad-daddy bin dispatches every documented command as machine-readable JSON", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "ad-daddy-cli-"));
