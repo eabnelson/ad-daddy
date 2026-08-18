@@ -7,6 +7,9 @@ import { signPlacement } from "../marketplace/signing-keys.ts";
 
 
 export const TEAM_CLAIM_TTL_MS = 24 * 60 * 60_000;
+export const TEAM_STARTING_POINTS = 50;
+export const TEAM_SEND_COST_PER_PERSON = 1;
+export const TEAM_EARN_PER_DISPLAYED_AD = 1;
 
 export interface TeamMember {
   id: string;
@@ -14,6 +17,7 @@ export interface TeamMember {
   displayName: string;
   tags: string[];
   receivesAds: boolean;
+  pointsBalance: number;
   capabilityHash: string;
   createdAt: string;
   updatedAt: string;
@@ -34,10 +38,17 @@ export interface TeamAd {
 
 export interface TeamAdSummary {
   adId: string;
-  targetTags: string[];
-  points: number;
+  pointsPerRecipient: 1;
+  recipientCount: number;
+  displayedCount: number;
   rewardKind: "team_points";
   createdAt: string;
+}
+
+export interface TeamAdRecipient {
+  adId: string;
+  receiverMemberId: string;
+  queuedAt: string;
 }
 
 export interface TeamDelivery {
@@ -52,15 +63,16 @@ export interface TeamDelivery {
 }
 
 export type PublicTeamMember = Omit<TeamMember, "capabilityHash">;
-export type PublicNetworkMember = Omit<TeamMember, "capabilityHash" | "installationId">;
+export type PublicNetworkMember = Omit<TeamMember, "capabilityHash" | "installationId" | "pointsBalance">;
 
 export interface TeamModeStore {
   createMember(member: TeamMember): Promise<void>;
   getMemberByCapabilityHash(capabilityHash: string): Promise<TeamMember | undefined>;
   updateMember(member: TeamMember): Promise<void>;
   listMembers(): Promise<TeamMember[]>;
-  createAd(ad: TeamAd): Promise<void>;
+  createAd(ad: TeamAd, recipients: TeamAdRecipient[]): Promise<void>;
   listAds(): Promise<TeamAd[]>;
+  listAdRecipients(): Promise<TeamAdRecipient[]>;
   claimNext(member: TeamMember, now: Date): Promise<{ ad: TeamAd; delivery: TeamDelivery } | undefined>;
   acknowledgeDelivery(member: TeamMember, deliveryId: string, now: Date): Promise<TeamDelivery>;
   listDeliveries(): Promise<TeamDelivery[]>;
@@ -69,6 +81,7 @@ export interface TeamModeStore {
 export class MemoryTeamModeStore implements TeamModeStore {
   readonly #members = new Map<string, TeamMember>();
   readonly #ads = new Map<string, TeamAd>();
+  readonly #recipients = new Map<string, TeamAdRecipient>();
   readonly #deliveries = new Map<string, TeamDelivery>();
 
   async createMember(member: TeamMember) {
@@ -85,11 +98,18 @@ export class MemoryTeamModeStore implements TeamModeStore {
     this.#members.set(member.id, clone(member)!);
   }
   async listMembers() { return [...this.#members.values()].map((member) => clone(member)!); }
-  async createAd(ad: TeamAd) {
+  async createAd(ad: TeamAd, recipients: TeamAdRecipient[]) {
     if (this.#ads.has(ad.id)) throw new Error("Team ad already exists");
+    const advertiser = this.#members.get(ad.advertiserMemberId);
+    const balance = advertiser?.pointsBalance ?? 0;
+    const cost = teamSendCost(recipients.length);
+    if (balance < cost) throw new Error(`This ad costs ${cost} points, but only ${balance} are available`);
+    this.#members.set(ad.advertiserMemberId, { ...advertiser!, pointsBalance: balance - cost });
     this.#ads.set(ad.id, clone(ad)!);
+    for (const recipient of recipients) this.#recipients.set(recipientKey(recipient.adId, recipient.receiverMemberId), clone(recipient)!);
   }
   async listAds() { return [...this.#ads.values()].map((ad) => clone(ad)!); }
+  async listAdRecipients() { return [...this.#recipients.values()].map((recipient) => clone(recipient)!); }
   async listDeliveries() { return [...this.#deliveries.values()].map((delivery) => clone(delivery)!); }
   async claimNext(member: TeamMember, now: Date) {
     if (!member.receivesAds) return undefined;
@@ -103,29 +123,35 @@ export class MemoryTeamModeStore implements TeamModeStore {
       }
       this.#deliveries.delete(pending.id);
     }
-    const deliveredAdIds = new Set([...this.#deliveries.values()]
+    const existingAdIds = new Set([...this.#deliveries.values()]
       .filter((delivery) => delivery.receiverMemberId === member.id)
       .map((delivery) => delivery.adId));
-    const eligible = rankEligibleAds([...this.#ads.values()], member, deliveredAdIds)[0];
-    if (!eligible) return undefined;
+    const queued = [...this.#recipients.values()]
+      .filter((recipient) => recipient.receiverMemberId === member.id && !existingAdIds.has(recipient.adId))
+      .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))[0];
+    const queuedAd = queued ? this.#ads.get(queued.adId) : undefined;
+    if (!queuedAd?.active) return undefined;
     const delivery: TeamDelivery = {
       id: `team_delivery_${crypto.randomUUID()}`,
-      adId: eligible.ad.id,
+      adId: queuedAd.id,
       receiverMemberId: member.id,
       installationId: member.installationId,
-      points: eligible.ad.points,
-      matchedTags: eligible.matchedTags,
+      points: TEAM_EARN_PER_DISPLAYED_AD,
+      matchedTags: [],
       deliveredAt: now.toISOString(),
       status: "pending",
     };
     this.#deliveries.set(delivery.id, delivery);
-    return { ad: clone(eligible.ad)!, delivery: clone(delivery)! };
+    return { ad: clone(queuedAd)!, delivery: clone(delivery)! };
   }
   async acknowledgeDelivery(member: TeamMember, deliveryId: string, now: Date) {
     const delivery = this.#deliveries.get(deliveryId);
     if (!delivery || delivery.receiverMemberId !== member.id) throw new TeamModeNotFoundError("Unknown team delivery");
+    if (delivery.status === "displayed") return clone(delivery)!;
     const displayed = { ...delivery, status: "displayed" as const, deliveredAt: now.toISOString() };
     this.#deliveries.set(deliveryId, displayed);
+    const receiver = this.#members.get(member.id)!;
+    this.#members.set(member.id, { ...receiver, pointsBalance: receiver.pointsBalance + TEAM_EARN_PER_DISPLAYED_AD });
     return clone(displayed)!;
   }
 }
@@ -157,6 +183,7 @@ export class TeamModeService {
       displayName: boundedText(input.displayName, "displayName", 1, 60),
       tags: input.tags === undefined ? [] : tags(input.tags),
       receivesAds: boolean(input.receivesAds, true),
+      pointsBalance: TEAM_STARTING_POINTS,
       capabilityHash: capabilityHash(memberKey),
       createdAt: now,
       updatedAt: now,
@@ -178,27 +205,46 @@ export class TeamModeService {
     return publicMember(updated);
   }
 
-  async createAd(input: { memberKey: unknown; title: unknown; body: unknown; targetTags: unknown; points: unknown }) {
+  async createAd(input: { memberKey: unknown; title: unknown; body: unknown; recipientMemberIds: unknown }) {
     const member = await this.requireMemberCapability(input.memberKey);
     const title = boundedText(input.title, "title", 1, 120);
     const body = boundedText(input.body, "body", 1, 2_000);
     assertSafeAdvertiserDisplayText(title);
     assertSafeAdvertiserDisplayText(body);
-    const points = integer(input.points, "points", 0, 10_000);
+    const requestedRecipientIds = recipientIds(input.recipientMemberIds);
+    const members = await this.#store.listMembers();
+    const membersById = new Map(members.map((candidate) => [candidate.id, candidate]));
+    const recipients = requestedRecipientIds.map((id) => {
+      const receiver = membersById.get(id);
+      if (!receiver || receiver.id === member.id || !receiver.receivesAds) {
+        throw new Error(`Recipient ${id} is not currently available to receive ads`);
+      }
+      return receiver;
+    });
+    const createdAt = this.now().toISOString();
     const ad: TeamAd = {
       id: `team_ad_${crypto.randomUUID()}`,
       advertiserMemberId: member.id,
       advertiserName: member.displayName,
       title,
       body,
-      targetTags: tags(input.targetTags),
-      points,
+      targetTags: [],
+      points: TEAM_EARN_PER_DISPLAYED_AD,
       rewardKind: "team_points",
       active: true,
-      createdAt: this.now().toISOString(),
+      createdAt,
     };
-    await this.#store.createAd(ad);
-    return ad;
+    const queued = recipients.map((receiver) => ({ adId: ad.id, receiverMemberId: receiver.id, queuedAt: createdAt }));
+    await this.#store.createAd(ad, queued);
+    const deliveries = await this.#store.listDeliveries();
+    const updatedMember = await this.requireMemberCapability(input.memberKey);
+    return {
+      ad,
+      recipients: recipientViews(queued, members, deliveries),
+      queuedCount: queued.length,
+      pointsSpent: teamSendCost(queued.length),
+      balance: updatedMember.pointsBalance,
+    };
   }
 
   async poll(input: { memberKey: unknown; installationId: unknown }) {
@@ -221,8 +267,8 @@ export class TeamModeService {
 
   async status(memberKey: unknown) {
     const selected = await this.requireMemberCapability(memberKey);
-    const [members, ads, deliveries] = await Promise.all([
-      this.#store.listMembers(), this.#store.listAds(), this.#store.listDeliveries(),
+    const [members, ads, recipients, deliveries] = await Promise.all([
+      this.#store.listMembers(), this.#store.listAds(), this.#store.listAdRecipients(), this.#store.listDeliveries(),
     ]);
     const selectedId = selected.id;
     const displayed = deliveries.filter((delivery) => delivery.status === "displayed");
@@ -232,12 +278,13 @@ export class TeamModeService {
       rewardKind: "team_points" as const,
       member: publicMember(selected),
       members: members.map(networkMember),
-      ads: ads.map(adSummary),
+      ads: ads.map((ad) => adSummary(ad, recipients, deliveries)),
       deliveries: deliveries.filter((delivery) => delivery.receiverMemberId === selectedId),
       score: {
-        pointsReceived: displayed.filter((delivery) => delivery.receiverMemberId === selectedId).reduce((sum, delivery) => sum + delivery.points, 0),
-        pointsSent: displayed.filter((delivery) => adsById.get(delivery.adId)?.advertiserMemberId === selectedId).reduce((sum, delivery) => sum + delivery.points, 0),
+        pointsReceived: displayed.filter((delivery) => delivery.receiverMemberId === selectedId).length,
+        pointsSent: recipients.filter((recipient) => adsById.get(recipient.adId)?.advertiserMemberId === selectedId).length,
       },
+      economy: economy(selected.pointsBalance),
     };
   }
 
@@ -254,32 +301,42 @@ export class TeamModeService {
 
   async advertiserProfile(memberKey: unknown) {
     const selected = await this.requireMemberCapability(memberKey);
-    const [members, ads] = await Promise.all([this.#store.listMembers(), this.#store.listAds()]);
+    const [members, ads, recipients, deliveries] = await Promise.all([
+      this.#store.listMembers(), this.#store.listAds(), this.#store.listAdRecipients(), this.#store.listDeliveries(),
+    ]);
     return {
       moneyEnabled: false as const,
       rewardKind: "team_points" as const,
       member: publicMember(selected),
-      ads: ads.filter((ad) => ad.advertiserMemberId === selected.id),
-      eligibleReceiverCount: members.filter((member) => member.id !== selected.id && member.receivesAds).length,
+      ads: adDetails(ads.filter((ad) => ad.advertiserMemberId === selected.id), members, recipients, deliveries),
+      availableReceiverCount: members.filter((member) => member.id !== selected.id && member.receivesAds).length,
+      economy: economy(selected.pointsBalance),
     };
   }
 
   async memberAds(memberKey: unknown) {
     const selected = await this.requireMemberCapability(memberKey);
-    return (await this.#store.listAds()).filter((ad) => ad.advertiserMemberId === selected.id);
+    const [members, ads, recipients, deliveries] = await Promise.all([
+      this.#store.listMembers(), this.#store.listAds(), this.#store.listAdRecipients(), this.#store.listDeliveries(),
+    ]);
+    return adDetails(ads.filter((ad) => ad.advertiserMemberId === selected.id), members, recipients, deliveries);
   }
 
   async browseAds(memberKey: unknown) {
     const selected = await this.requireMemberCapability(memberKey);
-    const [ads, deliveries] = await Promise.all([this.#store.listAds(), this.#store.listDeliveries()]);
-    const seen = new Set(deliveries
-      .filter((delivery) => delivery.receiverMemberId === selected.id)
+    const [ads, recipients, deliveries] = await Promise.all([
+      this.#store.listAds(), this.#store.listAdRecipients(), this.#store.listDeliveries(),
+    ]);
+    const adsById = new Map(ads.map((ad) => [ad.id, ad]));
+    const displayedAdIds = new Set(deliveries
+      .filter((delivery) => delivery.receiverMemberId === selected.id && delivery.status === "displayed")
       .map((delivery) => delivery.adId));
-    return rankEligibleAds(ads, selected, seen).map(({ ad, matchedTags }) => ({
-      ...adSummary(ad),
-      matchedTags,
-      matchCount: matchedTags.length,
-    }));
+    return recipients
+      .filter((recipient) => recipient.receiverMemberId === selected.id && !displayedAdIds.has(recipient.adId))
+      .map((recipient) => adsById.get(recipient.adId))
+      .filter((ad) => ad?.active)
+      .filter((ad): ad is TeamAd => Boolean(ad))
+      .map((ad) => ({ ...adSummary(ad, recipients, deliveries), queuedForYou: true as const }));
   }
 
   private async requireMemberCapability(memberKey: unknown) {
@@ -301,10 +358,10 @@ export class TeamModeService {
       contentReference: `https://team.ad-daddy.invalid/ads/${encodeURIComponent(ad.id)}`,
       disclosure: "Sponsored",
       payout: { amountMinor: 0, currency: "USD" },
-      nonCashReward: { kind: "team_points", amount: ad.points, label: "team points", redeemable: false },
+      nonCashReward: { kind: "team_points", amount: TEAM_EARN_PER_DISPLAYED_AD, label: "team points", redeemable: false },
       signalsUsed: delivery.matchedTags,
       creative: {
-        body: `${ad.body}\n\nPlay-money reward: ${ad.points} team points. Team points have no cash value and cannot be redeemed.`,
+        body: `${ad.body}\n\nYou earn 1 team point when this ad is displayed. Team points have no cash value and cannot be redeemed.`,
         attachments: [],
       },
       issuedAt: issuedAt.toISOString(),
@@ -318,19 +375,6 @@ export class TeamModeService {
 export class TeamModeNotFoundError extends Error {}
 export class TeamModeInfrastructureError extends Error {}
 
-function matchingTags(targetTags: string[], memberTags: string[]) {
-  const member = new Set(memberTags);
-  return targetTags.filter((tag) => member.has(tag));
-}
-
-export function rankEligibleAds(ads: TeamAd[], member: TeamMember, excludedAdIds: ReadonlySet<string>) {
-  return ads
-    .filter((ad) => ad.active && ad.advertiserMemberId !== member.id && !excludedAdIds.has(ad.id))
-    .map((ad) => ({ ad, matchedTags: matchingTags(ad.targetTags, member.tags) }))
-    .filter(({ ad, matchedTags }) => ad.targetTags.length === 0 || matchedTags.length > 0)
-    .sort((left, right) => right.matchedTags.length - left.matchedTags.length || left.ad.createdAt.localeCompare(right.ad.createdAt));
-}
-
 function tags(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 20) throw new Error("tags must be an array with at most 20 entries");
   const normalized = value.map((tag) => boundedText(tag, "tag", 1, 32).trim().toLowerCase());
@@ -338,14 +382,18 @@ function tags(value: unknown): string[] {
   return [...new Set(normalized)];
 }
 
+function recipientIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 24) {
+    throw new Error("recipientMemberIds must contain 1-24 teammates");
+  }
+  const normalized = value.map((id) => boundedText(id, "recipientMemberId", 1, 128));
+  if (new Set(normalized).size !== normalized.length) throw new Error("recipientMemberIds must not contain duplicates");
+  return normalized;
+}
+
 function boundedText(value: unknown, name: string, minimum: number, maximum: number): string {
   if (typeof value !== "string" || value.trim().length < minimum || value.length > maximum) throw new Error(`${name} must contain ${minimum}-${maximum} characters`);
   return value.trim();
-}
-
-function integer(value: unknown, name: string, minimum: number, maximum: number): number {
-  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) throw new Error(`${name} must be an integer from ${minimum} to ${maximum}`);
-  return value as number;
 }
 
 function boolean(value: unknown, fallback: boolean): boolean {
@@ -369,7 +417,7 @@ function capabilityHash(value: string): string {
 function publicMember(member: TeamMember): PublicTeamMember {
   return {
     id: member.id, installationId: member.installationId, displayName: member.displayName,
-    tags: [...member.tags], receivesAds: member.receivesAds,
+    tags: [...member.tags], receivesAds: member.receivesAds, pointsBalance: member.pointsBalance,
     createdAt: member.createdAt, updatedAt: member.updatedAt,
   };
 }
@@ -381,12 +429,53 @@ function networkMember(member: TeamMember): PublicNetworkMember {
   };
 }
 
-function adSummary(ad: TeamAd): TeamAdSummary {
+function adSummary(ad: TeamAd, recipients: TeamAdRecipient[], deliveries: TeamDelivery[]): TeamAdSummary {
+  const queued = recipients.filter((recipient) => recipient.adId === ad.id);
+  const displayedReceivers = new Set(deliveries
+    .filter((delivery) => delivery.adId === ad.id && delivery.status === "displayed")
+    .map((delivery) => delivery.receiverMemberId));
   return {
     adId: ad.id,
-    targetTags: [...ad.targetTags],
-    points: ad.points,
+    pointsPerRecipient: TEAM_SEND_COST_PER_PERSON,
+    recipientCount: queued.length,
+    displayedCount: queued.filter((recipient) => displayedReceivers.has(recipient.receiverMemberId)).length,
     rewardKind: ad.rewardKind,
     createdAt: ad.createdAt,
   };
+}
+
+export function teamSendCost(recipientCount: number) {
+  return recipientCount * TEAM_SEND_COST_PER_PERSON;
+}
+
+function recipientKey(adId: string, receiverMemberId: string) {
+  return `${adId}:${receiverMemberId}`;
+}
+
+function economy(balance: number) {
+  return {
+    balance,
+    startingBalance: TEAM_STARTING_POINTS,
+    sendCostPerPerson: TEAM_SEND_COST_PER_PERSON,
+    earnPerDisplayedAd: TEAM_EARN_PER_DISPLAYED_AD,
+  };
+}
+
+function recipientViews(recipients: TeamAdRecipient[], members: TeamMember[], deliveries: TeamDelivery[]) {
+  const membersById = new Map(members.map((member) => [member.id, member]));
+  return recipients.map((recipient) => {
+    const delivery = deliveries.find((candidate) => candidate.adId === recipient.adId && candidate.receiverMemberId === recipient.receiverMemberId);
+    return {
+      memberId: recipient.receiverMemberId,
+      displayName: membersById.get(recipient.receiverMemberId)?.displayName ?? "Unknown teammate",
+      status: delivery?.status ?? "queued" as "queued" | "pending" | "displayed",
+    };
+  });
+}
+
+function adDetails(ads: TeamAd[], members: TeamMember[], recipients: TeamAdRecipient[], deliveries: TeamDelivery[]) {
+  return ads.map((ad) => ({
+    ...ad,
+    recipients: recipientViews(recipients.filter((recipient) => recipient.adId === ad.id), members, deliveries),
+  }));
 }

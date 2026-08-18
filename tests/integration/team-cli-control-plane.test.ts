@@ -28,6 +28,7 @@ test("team CLI is a complete agent-first control plane with a private local capa
     displayName: "Erik",
     tags: ["typescript", "postgres"],
     receivesAds: false,
+    pointsBalance: 50,
     createdAt: "2026-08-18T12:00:00.000Z",
     updatedAt: "2026-08-18T12:00:00.000Z",
   };
@@ -61,14 +62,24 @@ test("team CLI is a complete agent-first control plane with a private local capa
     }
     assert.equal(authorization, "Bearer member.private.capability");
     if (body.action === "profile") member = { ...member, ...body, action: undefined } as typeof member;
-    if (body.action === "create_ad") ads.push({
-      id: "team_ad_1", advertiserMemberId: member.id, advertiserName: member.displayName,
-      title: body.title, body: body.body, targetTags: body.targetTags, points: body.points,
-    });
+    if (body.action === "create_ad") {
+      const ad = {
+        id: "team_ad_1", advertiserMemberId: member.id, advertiserName: member.displayName,
+        title: body.title, body: body.body, targetTags: [], points: 1, rewardKind: "team_points",
+        active: true, createdAt: "2026-08-18T12:00:00.000Z",
+      };
+      ads.push(ad);
+      response.statusCode = 201;
+      response.end(JSON.stringify({
+        ad, recipients: [{ memberId: "team_member_maya", displayName: "Maya", status: "queued" }],
+        queuedCount: 1, pointsSpent: 1, balance: 49,
+      }));
+      return;
+    }
     if (body.action === "browse_ads") {
       response.end(JSON.stringify({ matches: [{
-        adId: "team_ad_other", targetTags: ["typescript"], points: 20, rewardKind: "team_points",
-        createdAt: "2026-08-18T12:00:00.000Z", matchedTags: ["typescript"], matchCount: 1,
+        adId: "team_ad_other", pointsPerRecipient: 1, recipientCount: 1, displayedCount: 0,
+        rewardKind: "team_points", createdAt: "2026-08-18T12:00:00.000Z", queuedForYou: true,
       }] }));
       return;
     }
@@ -81,7 +92,7 @@ test("team CLI is a complete agent-first control plane with a private local capa
       return;
     }
     if (body.action === "advertiser_profile") {
-      response.end(JSON.stringify({ moneyEnabled: false, rewardKind: "team_points", member, ads, eligibleReceiverCount: 1 }));
+      response.end(JSON.stringify({ moneyEnabled: false, rewardKind: "team_points", member, ads, availableReceiverCount: 1 }));
       return;
     }
     if (body.action === "my_ads") {
@@ -91,10 +102,12 @@ test("team CLI is a complete agent-first control plane with a private local capa
     response.end(JSON.stringify({
       moneyEnabled: false, rewardKind: "team_points", member, members,
       ads: ads.map((ad) => ({
-        adId: ad.id, targetTags: ad.targetTags, points: ad.points, rewardKind: "team_points",
-        createdAt: "2026-08-18T12:00:00.000Z",
+        adId: ad.id, pointsPerRecipient: 1, recipientCount: 1, displayedCount: 0,
+        rewardKind: "team_points", createdAt: "2026-08-18T12:00:00.000Z",
       })),
-      deliveries: [], score: { pointsReceived: 0, pointsSent: 0 }, publicKeyPem: "pinned-team-public-key",
+      deliveries: [], score: { pointsReceived: 0, pointsSent: ads.length },
+      economy: { balance: 50 - ads.length, startingBalance: 50, sendCostPerPerson: 1, earnPerDisplayedAd: 1 },
+      publicKeyPem: "pinned-team-public-key",
     }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -148,7 +161,7 @@ test("team CLI is a complete agent-first control plane with a private local capa
   assert.equal((joined.result as { member: { id: string } }).member.id, member.id);
   assert.equal((joined.result as { member: { receivesAds: boolean } }).member.receivesAds, true);
   assert.deepEqual(requests.at(-1)?.body, { action: "join", displayName: "Erik", tags: [], receivesAds: true });
-  assert.match(String(joined.result.next), /receiver setup --cadence 1/, "default onboarding must immediately prepare receiver activation");
+  assert.match(String(joined.result.next), /Choose how often to receive ads/, "default onboarding must immediately ask for receiver frequency");
   assert.equal(JSON.stringify(joined), JSON.stringify(joined).replace(/member\.private\.capability/g, ""), "member token must not be printed");
   const stored = JSON.parse(await readFile(contextPath, "utf8")) as { memberToken: string; origin: string };
   assert.equal(stored.memberToken, "member.private.capability");
@@ -181,12 +194,14 @@ test("team CLI is a complete agent-first control plane with a private local capa
     JSON.stringify({ tags: ["typescript", "postgres", "ai"] }),
   );
   await assert.rejects(command(["team", "profile", "update", "--confirm", "--json", JSON.stringify({ action: "create_ad", tags: [] })], env), /unsupported field: action/);
-  await assert.rejects(command(["team", "ads", "send", "--json", JSON.stringify({ title: "Postgres preview", body: "Try the schema explorer.", targetTags: ["typescript"], points: 40 })], env), /requires --confirm/);
-  await assert.rejects(command(["team", "ads", "send", "--confirm", "--json", JSON.stringify({ action: "profile", title: "Postgres preview", body: "Try the schema explorer.", targetTags: ["typescript"], points: 40 })], env), /unsupported field: action/);
+  const selectedAd = { title: "Postgres preview", body: "Try the schema explorer.", recipientMemberIds: ["team_member_maya"] };
+  await assert.rejects(command(["team", "ads", "send", "--json", JSON.stringify(selectedAd)], env), /requires --confirm/);
+  await assert.rejects(command(["team", "ads", "send", "--confirm", "--json", JSON.stringify({ action: "profile", ...selectedAd })], env), /unsupported field: action/);
   await commandWithStdin(
     ["team", "ads", "send", "--confirm", "--input", "-"], env,
-    JSON.stringify({ title: "Postgres preview", body: "Try the schema explorer.", targetTags: ["typescript"], points: 40 }),
+    JSON.stringify(selectedAd),
   );
+  assert.deepEqual(requests.at(-1)?.body, { action: "create_ad", ...selectedAd });
   assert.equal(((await command(["team", "ads", "mine"], env)).result as { ads: unknown[] }).ads.length, 1);
 
   await assert.rejects(command(["team", "receiver", "setup", "--cadence", "0"], env), /integer from 1 to 1440 minutes/);
@@ -295,7 +310,7 @@ test("team check uses stored identity to display one signed task before acknowle
   const receiver = await service.join({ displayName: "Receiver", tags: ["typescript"], receivesAds: true });
   await service.createAd({
     memberKey: sender.memberKey, title: "Team database", body: "A database preview for the team.",
-    targetTags: ["typescript"], points: 20,
+    recipientMemberIds: [receiver.member.id],
   });
   const contextPath = join(directory, "team.json");
   const configPath = join(directory, "config.json");
@@ -348,6 +363,7 @@ test("team check uses stored identity to display one signed task before acknowle
 function testMember(receivesAds: boolean) {
   return {
     id: "team_member_erik", installationId: "team_install_erik", displayName: "Erik", tags: [], receivesAds,
+    pointsBalance: 50,
     createdAt: "2026-08-18T12:00:00.000Z", updatedAt: "2026-08-18T12:00:00.000Z",
   };
 }
@@ -399,7 +415,7 @@ class TeamCheckHost {
           queueMicrotask(() => {
             const item = {
               type: "agentMessage", id: "answer", phase: "final_answer",
-              text: "Sponsored via Ad Daddy\nSender — Team database\nReward: 20 team points\nMatched: typescript",
+              text: "Sponsored via Ad Daddy\nSender — Team database\nReward: 1 team points",
             };
             turn.items.push(item);
             emit({ method: "item/completed", params: { threadId: thread.id, turnId: turn.id, item } });

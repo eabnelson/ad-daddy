@@ -61,6 +61,10 @@
 .dark dd { margin: 0; }
 .check { grid-template-columns: 18px 1fr !important; align-items: center; }
 .check input { width: 16px; height: 16px; padding: 0; accent-color: var(--red); }
+.recipients { display: grid; gap: 10px; margin: 0; padding: 14px 0 0; border: 0; border-top: 1px solid currentColor; }
+.recipients legend { padding: 0 0 8px; font: 700 9px var(--font-mono), monospace; letter-spacing: .07em; text-transform: uppercase; }
+.recipients label { display: flex; grid-template-columns: none; align-items: center; gap: 10px; }
+.recipients input { width: 16px; height: 16px; padding: 0; accent-color: var(--red); }
 .network { grid-column: 1/-1; border-top: 1px solid var(--ink); }
 .network > header { display: flex; justify-content: space-between; align-items: center; padding: 20px; border-bottom: 1px solid var(--line); }
 .network h2 { margin: 5px 0 0; font: italic 28px Georgia, serif; }

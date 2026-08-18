@@ -1,8 +1,11 @@
 import {
   claimExpired,
-  rankEligibleAds,
+  TEAM_EARN_PER_DISPLAYED_AD,
+  TEAM_STARTING_POINTS,
+  teamSendCost,
   TeamModeNotFoundError,
   type TeamAd,
+  type TeamAdRecipient,
   type TeamDelivery,
   type TeamMember,
   type TeamModeStore,
@@ -17,12 +20,14 @@ interface D1Statement {
 }
 export interface TeamD1Database {
   prepare(sql: string): D1Statement;
+  batch?(statements: D1Statement[]): Promise<D1Result[]>;
 }
 
 /** Local/private-team persistence. These proof-only tables never touch money. */
 export class D1TeamModeStore implements TeamModeStore {
   readonly #db: TeamD1Database;
   #ready?: Promise<void>;
+  #writes = Promise.resolve();
 
   constructor(db: TeamD1Database) {
     this.#db = db;
@@ -38,6 +43,8 @@ export class D1TeamModeStore implements TeamModeStore {
       ).run();
     await this.#db.prepare(`INSERT INTO team_mode_v2_member_capabilities (member_id, capability_hash) VALUES (?, ?)`)
       .bind(member.id, member.capabilityHash).run();
+    await this.#db.prepare(`INSERT INTO team_mode_v2_point_balances (member_id, balance) VALUES (?, ?)`)
+      .bind(member.id, member.pointsBalance).run();
   }
 
   async getMemberByCapabilityHash(capabilityHash: string) {
@@ -59,20 +66,48 @@ export class D1TeamModeStore implements TeamModeStore {
     return (rows.results ?? []).map(member).filter((value): value is TeamMember => Boolean(value));
   }
 
-  async createAd(value: TeamAd) {
-    await this.ready();
-    await this.#db.prepare(`INSERT INTO team_mode_v2_ads
-      (id, advertiser_member_id, advertiser_name, title, body, target_tags_json, points, active, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-        value.id, value.advertiserMemberId, value.advertiserName, value.title, value.body,
-        JSON.stringify(value.targetTags), value.points, value.active ? 1 : 0, value.createdAt,
-      ).run();
+  async createAd(value: TeamAd, recipients: TeamAdRecipient[]) {
+    await this.serialize(async () => {
+      await this.ready();
+      const advertiser = (await this.listMembers()).find((member) => member.id === value.advertiserMemberId);
+      const balance = advertiser?.pointsBalance ?? 0;
+      const cost = teamSendCost(recipients.length);
+      if (balance < cost) throw new Error(`This ad costs ${cost} points, but only ${balance} are available`);
+      const charged = await this.#db.prepare(`UPDATE team_mode_v2_point_balances SET balance = balance - ?
+        WHERE member_id = ? AND balance >= ?`).bind(cost, value.advertiserMemberId, cost).run();
+      if (charged.meta?.changes !== 1) throw new Error(`This ad costs ${cost} points, but only ${balance} are available`);
+      const statements = [
+        this.#db.prepare(`INSERT INTO team_mode_v2_ads
+          (id, advertiser_member_id, advertiser_name, title, body, target_tags_json, points, active, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+            value.id, value.advertiserMemberId, value.advertiserName, value.title, value.body,
+            JSON.stringify(value.targetTags), value.points, value.active ? 1 : 0, value.createdAt,
+          ),
+        ...recipients.map((recipient) => this.#db.prepare(`INSERT INTO team_mode_v2_ad_recipients
+          (ad_id, receiver_member_id, queued_at) VALUES (?, ?, ?)`)
+          .bind(recipient.adId, recipient.receiverMemberId, recipient.queuedAt)),
+      ];
+      try {
+        if (this.#db.batch) await this.#db.batch(statements);
+        else for (const statement of statements) await statement.run();
+      } catch (error) {
+        await this.#db.prepare("UPDATE team_mode_v2_point_balances SET balance = balance + ? WHERE member_id = ?")
+          .bind(cost, value.advertiserMemberId).run();
+        throw error;
+      }
+    });
   }
 
   async listAds() {
     await this.ready();
     const rows = await this.#db.prepare("SELECT * FROM team_mode_v2_ads ORDER BY created_at ASC LIMIT 1000").all();
     return (rows.results ?? []).map(ad).filter((value): value is TeamAd => Boolean(value));
+  }
+
+  async listAdRecipients() {
+    await this.ready();
+    const rows = await this.#db.prepare("SELECT * FROM team_mode_v2_ad_recipients ORDER BY queued_at ASC LIMIT 5000").all();
+    return (rows.results ?? []).map(adRecipient).filter((value): value is TeamAdRecipient => Boolean(value));
   }
 
   async listDeliveries() {
@@ -87,7 +122,7 @@ export class D1TeamModeStore implements TeamModeStore {
 
   async claimNext(receiver: TeamMember, now: Date) {
     if (!receiver.receivesAds) return undefined;
-    const [ads, deliveries] = await Promise.all([this.listAds(), this.listDeliveries()]);
+    const [ads, recipients, deliveries] = await Promise.all([this.listAds(), this.listAdRecipients(), this.listDeliveries()]);
     const pending = deliveries.find((item) => item.receiverMemberId === receiver.id && item.status === "pending");
     if (pending) {
       if (!claimExpired(pending, now)) {
@@ -104,14 +139,15 @@ export class D1TeamModeStore implements TeamModeStore {
       SELECT 1 FROM team_mode_v2_deliveries d LEFT JOIN team_mode_v2_delivery_receipts r ON r.delivery_id = d.id
       WHERE d.id = team_mode_v2_pending_receivers.delivery_id AND r.delivery_id IS NULL
     )`).bind(receiver.id).run();
-    const deliveredAdIds = new Set(deliveries
-      .filter((item) => item.receiverMemberId === receiver.id && item.id !== pending?.id)
-      .map((item) => item.adId));
-    const eligible = rankEligibleAds(ads, receiver, deliveredAdIds);
-    for (const candidate of eligible) {
+    const deliveredAdIds = new Set(deliveries.filter((item) => item.receiverMemberId === receiver.id).map((item) => item.adId));
+    const queued = recipients
+      .filter((recipient) => recipient.receiverMemberId === receiver.id && !deliveredAdIds.has(recipient.adId))
+      .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))[0];
+    const queuedAd = queued ? ads.find((ad) => ad.id === queued.adId && ad.active) : undefined;
+    if (queuedAd) {
       const claimed: TeamDelivery = {
-        id: `team_delivery_${crypto.randomUUID()}`, adId: candidate.ad.id, receiverMemberId: receiver.id,
-        installationId: receiver.installationId, points: candidate.ad.points, matchedTags: candidate.matchedTags,
+        id: `team_delivery_${crypto.randomUUID()}`, adId: queuedAd.id, receiverMemberId: receiver.id,
+        installationId: receiver.installationId, points: TEAM_EARN_PER_DISPLAYED_AD, matchedTags: [],
         deliveredAt: now.toISOString(),
         status: "pending",
       };
@@ -124,7 +160,7 @@ export class D1TeamModeStore implements TeamModeStore {
           claimed.id, claimed.adId, claimed.receiverMemberId, claimed.installationId, claimed.points,
           JSON.stringify(claimed.matchedTags), claimed.deliveredAt,
         ).run();
-      if (result.meta?.changes === 1) return { ad: candidate.ad, delivery: claimed };
+      if (result.meta?.changes === 1) return { ad: queuedAd, delivery: claimed };
       await this.#db.prepare("DELETE FROM team_mode_v2_pending_receivers WHERE receiver_member_id = ? AND delivery_id = ?")
         .bind(receiver.id, claimed.id).run();
     }
@@ -137,6 +173,10 @@ export class D1TeamModeStore implements TeamModeStore {
       (delivery_id, receiver_member_id, displayed_at)
       SELECT id, receiver_member_id, ? FROM team_mode_v2_deliveries WHERE id = ? AND receiver_member_id = ?`)
       .bind(now.toISOString(), deliveryId, receiver.id).run();
+    if (result.meta?.changes === 1) {
+      await this.#db.prepare("UPDATE team_mode_v2_point_balances SET balance = balance + ? WHERE member_id = ?")
+        .bind(TEAM_EARN_PER_DISPLAYED_AD, receiver.id).run();
+    }
     const existing = await this.#db.prepare(`SELECT d.*,
       CASE WHEN r.delivery_id IS NULL THEN 'pending' ELSE 'displayed' END AS delivery_status,
       COALESCE(r.displayed_at, d.delivered_at) AS effective_delivered_at
@@ -160,10 +200,19 @@ export class D1TeamModeStore implements TeamModeStore {
     await this.#db.prepare(`CREATE TABLE IF NOT EXISTS team_mode_v2_member_capabilities (
         member_id TEXT PRIMARY KEY, capability_hash TEXT NOT NULL UNIQUE
       )`).run();
+    await this.#db.prepare(`CREATE TABLE IF NOT EXISTS team_mode_v2_point_balances (
+        member_id TEXT PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0)
+      )`).run();
+    await this.#db.prepare(`INSERT OR IGNORE INTO team_mode_v2_point_balances (member_id, balance)
+      SELECT id, ${TEAM_STARTING_POINTS} FROM team_mode_v2_members`).run();
     await this.#db.prepare(`CREATE TABLE IF NOT EXISTS team_mode_v2_ads (
         id TEXT PRIMARY KEY, advertiser_member_id TEXT NOT NULL, advertiser_name TEXT NOT NULL,
         title TEXT NOT NULL, body TEXT NOT NULL, target_tags_json TEXT NOT NULL, points INTEGER NOT NULL,
         active INTEGER NOT NULL, created_at TEXT NOT NULL
+      )`).run();
+    await this.#db.prepare(`CREATE TABLE IF NOT EXISTS team_mode_v2_ad_recipients (
+        ad_id TEXT NOT NULL, receiver_member_id TEXT NOT NULL, queued_at TEXT NOT NULL,
+        PRIMARY KEY (ad_id, receiver_member_id)
       )`).run();
     await this.#db.prepare(`CREATE TABLE IF NOT EXISTS team_mode_v2_deliveries (
         id TEXT PRIMARY KEY, ad_id TEXT NOT NULL, receiver_member_id TEXT NOT NULL, installation_id TEXT NOT NULL,
@@ -186,16 +235,24 @@ export class D1TeamModeStore implements TeamModeStore {
       throw error;
     });
   }
+
+  private async serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#writes.then(operation, operation);
+    this.#writes = result.then(() => undefined, () => undefined);
+    return result;
+  }
 }
 
-const MEMBER_SELECT = `SELECT m.*, c.capability_hash FROM team_mode_v2_members m
-  INNER JOIN team_mode_v2_member_capabilities c ON c.member_id = m.id`;
+const MEMBER_SELECT = `SELECT m.*, c.capability_hash, points.balance AS points_balance FROM team_mode_v2_members m
+  INNER JOIN team_mode_v2_member_capabilities c ON c.member_id = m.id
+  INNER JOIN team_mode_v2_point_balances points ON points.member_id = m.id`;
 
 function member(row: Record<string, unknown> | null): TeamMember | undefined {
   if (!row) return undefined;
   return {
     id: string(row.id), installationId: string(row.installation_id), displayName: string(row.display_name),
-    tags: strings(row.tags_json), receivesAds: row.receives_ads === 1, createdAt: string(row.created_at), updatedAt: string(row.updated_at),
+    tags: strings(row.tags_json), receivesAds: row.receives_ads === 1, pointsBalance: integer(row.points_balance),
+    createdAt: string(row.created_at), updatedAt: string(row.updated_at),
     capabilityHash: string(row.capability_hash),
   };
 }
@@ -206,6 +263,10 @@ function ad(row: Record<string, unknown> | null): TeamAd | undefined {
     title: string(row.title), body: string(row.body), targetTags: strings(row.target_tags_json), points: integer(row.points),
     rewardKind: "team_points", active: row.active === 1, createdAt: string(row.created_at),
   };
+}
+function adRecipient(row: Record<string, unknown> | null): TeamAdRecipient | undefined {
+  if (!row) return undefined;
+  return { adId: string(row.ad_id), receiverMemberId: string(row.receiver_member_id), queuedAt: string(row.queued_at) };
 }
 function delivery(row: Record<string, unknown> | null): TeamDelivery | undefined {
   if (!row) return undefined;
