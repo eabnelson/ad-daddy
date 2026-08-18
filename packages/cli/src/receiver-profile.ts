@@ -94,7 +94,7 @@ function validateRemoteProfile(value: unknown): ReceiverProfileSync {
   const record = value as Record<string, unknown>;
   if (!["active", "paused", "revoked"].includes(String(record.status)) || !Number.isSafeInteger(record.consentVersion) || (record.consentVersion as number) < 1 ||
     !record.publishedFields || typeof record.publishedFields !== "object" || Array.isArray(record.publishedFields) ||
-    !Number.isSafeInteger(record.cadenceMinutes) || (record.cadenceMinutes as number) < 5 || typeof record.termsVersion !== "string" ||
+    !Number.isSafeInteger(record.cadenceMinutes) || (record.cadenceMinutes as number) < 1 || typeof record.termsVersion !== "string" ||
     typeof record.privacyVersion !== "string" || !record.hostDisclosure || typeof record.hostDisclosure !== "object") {
     throw new Error("Ad Daddy returned a malformed receiver profile");
   }

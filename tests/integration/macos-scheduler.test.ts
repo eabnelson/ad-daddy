@@ -15,9 +15,10 @@ class FakeLaunchd {
 test("preview/install/restart/upgrade/pause/uninstall leave exactly one or zero jobs", async () => {
   const host = new FakeLaunchd();
   const scheduler = new LaunchdScheduler(host, { homeDirectory: "/tmp/user", executablePath: "/opt/ad-daddy" });
-  const preview = scheduler.preview({ installationId: "receiver-1", cadenceMinutes: 30 });
+  assert.throws(() => scheduler.preview({ installationId: "receiver-1", cadenceMinutes: 0 }), /Invalid scheduler cadence/);
+  const preview = scheduler.preview({ installationId: "receiver-1", cadenceMinutes: 1 });
   assert.match(preview.plist, /StartInterval/);
-  assert.match(preview.plist, /1800/);
+  assert.match(preview.plist, /60/);
   await scheduler.install({ installationId: "receiver-1", cadenceMinutes: 30 });
   await scheduler.restart({ installationId: "receiver-1", cadenceMinutes: 30 });
   await scheduler.install({ installationId: "receiver-1", cadenceMinutes: 60 });

@@ -39,7 +39,7 @@ export default async function ReceiverSettingsPage() {
         </fieldset>
         <fieldset>
           <legend>Delivery</legend>
-          <label>Cadence (minutes)<input name="cadenceMinutes" type="number" min="5" defaultValue="60" /></label>
+          <label>Cadence (minutes)<input name="cadenceMinutes" type="number" min="1" defaultValue="1" /></label>
           <label>Maximum ads per day<input name="maxAdsPerDay" type="number" min="1" max="24" defaultValue="2" /></label>
           <label>Quiet hours<input name="quietHours" placeholder="22:00–07:00" /></label>
           <p>Native ads use one display turn in a separate sponsored session. The selected model is shown before activation.</p>

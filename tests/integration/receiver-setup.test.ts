@@ -37,6 +37,9 @@ test("role-first setup previews exact snapshot and requires disclosure acceptanc
   assert.deepEqual(selectSetupRole("both"), { role: "both", configureReceiver: true, configureAdvertiser: true });
   const store = new MemoryLocalStore();
   const setup = new ReceiverSetupService(store);
+  await assert.rejects(setup.prepare({ ...base, cadenceMinutes: 0 }), /at least one minute/i);
+  const oneMinuteDraft = await setup.prepare({ ...base, cadenceMinutes: 1 });
+  assert.equal(oneMinuteDraft.cadenceMinutes, 1);
   const draft = await setup.prepare(base);
   assert.equal(draft.consentVersion, 1);
   assert.deepEqual(draft.publishedFields, {

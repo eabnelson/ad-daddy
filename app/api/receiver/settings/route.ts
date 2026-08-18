@@ -58,7 +58,7 @@ export function createReceiverSettingsHandler(runtime?: ReceiverSettingsRuntime)
           accountId,
           role: "receiver",
           profile: profileFrom(form),
-          cadenceMinutes: integer(form.get("cadenceMinutes"), "cadenceMinutes", 5, 10_080),
+          cadenceMinutes: integer(form.get("cadenceMinutes"), "cadenceMinutes", 1, 10_080),
           termsVersion: TERMS_VERSION,
           privacyVersion: PRIVACY_VERSION,
           hostDisclosure: { host: "Codex", consumesTurn: true },

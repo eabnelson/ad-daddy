@@ -95,6 +95,10 @@ test("legacy CLI poll shape uses a member token and local-only environment fails
   const hosted = createTeamModeHandler({ service: service(), inviteCode: INVITE_CODE, memberTokenSecret: MEMBER_TOKEN_SECRET, environment: "hosted_test" });
   const hostedMember = await json(hosted(request({ action: "join", displayName: "Hosted", tags: [], receivesAds: true })));
   assert.equal(hostedMember.member.id.startsWith("team_member_"), true);
+
+  const defaultReceiver = await json(hosted(request({ action: "join", displayName: "Default receiver" })));
+  assert.deepEqual(defaultReceiver.member.tags, []);
+  assert.equal(defaultReceiver.member.receivesAds, true);
 });
 
 test("team mode rejects invite-code configuration that is unsafe to paste into agent commands", async () => {

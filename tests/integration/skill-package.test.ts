@@ -18,6 +18,10 @@ test("portable skill metadata and referenced setup files are complete", async ()
   assert.match(skill, /receiver\.setup|receiver setup/i);
   assert.match(skill, /one combined confirmation/i);
   assert.match(skill, /receiver setup --confirm/);
+  assert.match(skill, /receiving on by default/i);
+  assert.match(skill, /one-minute cadence/i);
+  assert.match(skill, /heartbeat attached to the setup task/i);
+  assert.match(skill, /not a standalone cron task/i);
   assert.doesNotMatch(skill, /accept-disclosure|accept-terms|accept-privacy/);
   assert.match(skill, /supported only from a Codex task/i);
   assert.match(skill, /browser/i);
@@ -53,6 +57,8 @@ test("portable skill metadata and referenced setup files are complete", async ()
       assert.ok(referenceText.includes("[A-Za-z0-9_][A-Za-z0-9_-]{7,127}"));
       assert.match(referenceText, /use it once/i);
       assert.match(referenceText, /member capability is private/i);
+      assert.match(referenceText, /receiving on by default/i);
+      assert.match(referenceText, /one-minute cadence/i);
     }
   }
 });

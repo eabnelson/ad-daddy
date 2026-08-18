@@ -155,7 +155,7 @@ export class TeamModeService {
       id,
       installationId: `team_install_${crypto.randomUUID()}`,
       displayName: boundedText(input.displayName, "displayName", 1, 60),
-      tags: tags(input.tags),
+      tags: input.tags === undefined ? [] : tags(input.tags),
       receivesAds: boolean(input.receivesAds, true),
       capabilityHash: capabilityHash(memberKey),
       createdAt: now,

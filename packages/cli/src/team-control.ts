@@ -50,7 +50,7 @@ interface TeamControlDependencies {
 }
 
 const ACTIONS = [
-  { name: "join", command: "team join --url <COORDINATOR_URL> --invite-code <INVITE_CODE> --input -", mutates: true, input: "displayName, tags, receivesAds as JSON on stdin" },
+  { name: "join", command: "team join --url <COORDINATOR_URL> --invite-code <INVITE_CODE> --input -", mutates: true, input: "displayName required; tags optional; receiving defaults on" },
   { name: "status", command: "team status", mutates: false },
   { name: "profile.show", command: "team profile show", mutates: false },
   { name: "profile.update", command: "team profile update --confirm --input -", mutates: true, input: "displayName?, tags?, receivesAds? as JSON on stdin" },
@@ -81,7 +81,12 @@ export async function runTeamControl(
     const origin = normalizeOrigin(required(flags.values.get("url") ?? dependencies.env.AD_DADDY_TEAM_URL, "team join requires --url or AD_DADDY_TEAM_URL"));
     const inviteCode = validInviteCode(required(flags.values.get("invite-code") ?? dependencies.env.AD_DADDY_INVITE_CODE, "team join requires --invite-code or AD_DADDY_INVITE_CODE"));
     const input = exactInput(await dependencies.readInput(), "team join", ["displayName", "tags", "receivesAds"]);
-    const response = requireRecord(await teamRequest(origin, inviteCode, { ...input, action: "join" }, dependencies.fetch), "team join response");
+    const response = requireRecord(await teamRequest(origin, inviteCode, {
+      ...input,
+      tags: input.tags ?? [],
+      receivesAds: input.receivesAds ?? true,
+      action: "join",
+    }, dependencies.fetch), "team join response");
     const member = teamMember(response.member);
     const context: TeamLocalIdentity = {
       version: 1,
@@ -93,7 +98,7 @@ export async function runTeamControl(
     };
     await store.write(context);
     const next = member.receivesAds
-      ? "Run `ad-daddy team receiver setup` to preview the exact receiver disclosure and current contracts."
+      ? "Run `ad-daddy team receiver setup --cadence 1` now to preview the receiver disclosure and activate one-minute sponsored-task checks."
       : "Receiving is off. If the human later chooses to receive sponsored tasks, run `ad-daddy team profile update --confirm --input -` and send the serialized changes through stdin.";
     return { member, origin, contextStored: true, next };
   }
@@ -364,8 +369,8 @@ function integer(value: unknown, name: string, minimum: number, maximum: number)
 }
 
 function cadence(value: string | undefined): number {
-  const parsed = Number(value ?? "15");
-  if (!Number.isSafeInteger(parsed) || parsed < 5 || parsed > 1_440) throw new Error("--cadence must be an integer from 5 to 1440 minutes");
+  const parsed = Number(value ?? "1");
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1_440) throw new Error("--cadence must be an integer from 1 to 1440 minutes");
   return parsed;
 }
 

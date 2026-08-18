@@ -19,6 +19,9 @@ test("hosted agent instructions are origin-bound and cover both marketplace role
   assert.match(markdown, /ads send --confirm --input -/);
   assert.ok(markdown.includes("[A-Za-z0-9_][A-Za-z0-9_-]{7,127}"));
   assert.match(markdown, /one-time join/i);
+  assert.match(markdown, /receiving on by default/i);
+  assert.match(markdown, /"receivesAds":true/);
+  assert.match(markdown, /receiver setup --cadence 1/);
   assert.match(markdown, /do not write it to a file or recurring task/i);
   assert.match(markdown, /member capability remains private/i);
   assert.match(markdown, /prompt, recurring task, browser, log, repository, or command argument/i);
@@ -38,6 +41,8 @@ test("hosted agent instructions are origin-bound and cover both marketplace role
   assert.match(markdown, /team ads send/);
   assert.match(markdown, /team receiver setup/);
   assert.match(markdown, /--cadence <MINUTES>/);
+  assert.match(markdown, /1–1,440 minutes/);
+  assert.match(markdown, /defaulting to 1/);
   assert.match(markdown, /Turn on sponsored task checks every <MINUTES> minutes and accept <TERMS_VERSION> and <PRIVACY_VERSION>\?/);
   assert.match(markdown, /team receiver setup --confirm/);
   assert.doesNotMatch(markdown, /accept-disclosure|accept-terms|accept-privacy/);
@@ -52,6 +57,9 @@ test("hosted agent instructions are origin-bound and cover both marketplace role
   assert.match(markdown, /receiver profile.*advertiser profile/i);
   assert.match(markdown, /exact public fields.*before saving or sending anything/i);
   assert.match(markdown, /team check/);
+  assert.match(markdown, /do not report.*active.*until.*persisted/i);
+  assert.match(markdown, /heartbeat attached to this setup task/i);
+  assert.match(markdown, /do not create a standalone cron task/i);
   assert.match(markdown, /browser is optional/i);
   assert.doesNotMatch(markdown, /Existing member token/);
   assert.doesNotMatch(markdown, /paste.*token/i);

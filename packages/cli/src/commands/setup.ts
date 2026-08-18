@@ -38,7 +38,7 @@ export class ReceiverSetupService {
   async prepare(input: SetupInput) {
     selectSetupRole(input.role);
     if (input.role === "advertiser") throw new Error("Receiver profile setup requires receiver or both role");
-    if (!Number.isSafeInteger(input.cadenceMinutes) || input.cadenceMinutes < 5) throw new Error("Cadence must be at least five minutes");
+    if (!Number.isSafeInteger(input.cadenceMinutes) || input.cadenceMinutes < 1) throw new Error("Cadence must be at least one minute");
     const existing = await this.#store.get(input.installationId);
     if (existing && existing.accountId !== input.accountId) throw new Error("Installation belongs to another account");
     const publishedFields = buildPublishedProfile(input.profile);

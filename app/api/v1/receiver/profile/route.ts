@@ -56,7 +56,7 @@ function configFromBody(value: unknown, accountId: string, installationId: strin
   const enabled = Object.fromEntries(RECEIVER_FIELD_KEYS.map((key) => [key, publishedFields[key] !== undefined]));
   const validated = buildPublishedProfile({ values: publishedFields, enabled });
   const cadenceMinutes = Number(record.cadenceMinutes);
-  if (!Number.isSafeInteger(cadenceMinutes) || cadenceMinutes < 5 || cadenceMinutes > 10_080) throw new Error("Receiver cadence is invalid");
+  if (!Number.isSafeInteger(cadenceMinutes) || cadenceMinutes < 1 || cadenceMinutes > 10_080) throw new Error("Receiver cadence is invalid");
   if (typeof record.termsVersion !== "string" || !record.termsVersion || record.termsVersion.length > 128 ||
     typeof record.privacyVersion !== "string" || !record.privacyVersion || record.privacyVersion.length > 128) throw new Error("Receiver contract version is invalid");
   const host = record.hostDisclosure as { host?: unknown; displayModel?: unknown; consumesTurn?: unknown } | undefined;

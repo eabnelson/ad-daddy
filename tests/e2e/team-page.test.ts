@@ -23,6 +23,8 @@ test("private team workspace makes the no-money sender and receiver loop self-se
   assert.match(source, /joinPendingRef\.current/);
   assert.match(source, /disabled=\{joining\}/);
   assert.match(source, /loads AD_DADDY_API_TOKEN from that local secret store/);
+  assert.match(source, /heartbeat attached to this setup task every minute/i);
+  assert.match(source, /not a standalone cron task/i);
   assert.match(source, /Creative stays inside its separate display-only sponsored task/);
   assert.doesNotMatch(source, /ad\.(?:title|body|advertiserName)/);
   assert.doesNotMatch(source, /--token '\$\{session\.memberAccessToken\}'/);
@@ -79,6 +81,10 @@ test("team setup document delegates recurring polling and task creation to the r
   assert.match(setup, /use it once/i);
   assert.match(setup, /member-scoped capability.*remains private/i);
   assert.match(setup, /one combined question/i);
+  assert.match(setup, /receiving on by default/i);
+  assert.match(setup, /one-minute cadence/i);
+  assert.match(setup, /heartbeat attached to the setup task/i);
+  assert.match(setup, /not a standalone cron task/i);
   assert.match(setup, /Build my profile/);
   assert.match(setup, /Get ads/);
   assert.match(setup, /Send an ad/);

@@ -107,12 +107,12 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
             assertTeamReceiverHostCapability(env);
             await requireTeamReceiverDraft(store, context.installationId, "setup");
             const installation = await setup.activate({ installationId: context.installationId, ...acceptance });
-            return { installation, next: "Create a host-native recurring task that runs `ad-daddy team check` at the approved cadence." };
+            return { installation, next: `Create a Codex heartbeat attached to this setup task that runs \`ad-daddy team check\` every ${installation.cadenceMinutes} minute${installation.cadenceMinutes === 1 ? "" : "s"}; do not create a standalone cron task. Verify it is persisted, then run one check now. Do not report receiving as active until the recurring task is verified.` };
           },
           pause: async (context) => setup.pause(context.installationId),
           resumePreview: async (context) => {
             const current = await store.get(context.installationId);
-            const prepared = await setup.prepare(teamReceiverInput(context, current?.cadenceMinutes ?? 15));
+            const prepared = await setup.prepare(teamReceiverInput(context, current?.cadenceMinutes ?? 1));
             return { ...prepared, receiverHost: teamReceiverHostCapability(env), next: "Show this exact disclosure and both contract versions before asking for fresh resume acceptance." };
           },
           resumeActivate: async (context, acceptance) => {

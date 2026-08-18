@@ -42,7 +42,7 @@ test("authenticated receiver preview, pause, and revoke share the setup service"
   const store = new MemoryLocalStore();
   const handler = createReceiverSettingsHandler({ store, setup: new ReceiverSetupService(store) });
   const preview = await handler(receiverRequest(new URLSearchParams({
-    intent: "preview", cadenceMinutes: "60", quietHours: "22:00-07:00", maxAdsPerDay: "2",
+    intent: "preview", cadenceMinutes: "1", quietHours: "22:00-07:00", maxAdsPerDay: "2",
     "enabled.coarseLocation": "on", coarseLocation: "US Northeast",
     "enabled.projectDescriptions": "on", projectDescriptions: "Building an agent inbox\nBuilding a deploy monitor",
     "enabled.acceptedRewardTypes": "on", rewardType: "credits",

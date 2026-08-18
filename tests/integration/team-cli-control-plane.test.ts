@@ -49,6 +49,12 @@ test("team CLI is a complete agent-first control plane with a private local capa
     response.setHeader("content-type", "application/json");
     if (body.action === "join") {
       assert.equal(authorization, "Bearer iloveads");
+      member = {
+        ...member,
+        displayName: String(body.displayName),
+        tags: Array.isArray(body.tags) ? body.tags as string[] : [],
+        receivesAds: body.receivesAds === undefined ? true : Boolean(body.receivesAds),
+      };
       response.statusCode = 201;
       response.end(JSON.stringify({ member, accessToken: "member.private.capability", publicKeyPem: "pinned-team-public-key" }));
       return;
@@ -114,7 +120,7 @@ test("team CLI is a complete agent-first control plane with a private local capa
   ]);
   const joinAction = actionCatalog.find((action) => action.name === "join");
   assert.equal(joinAction?.command, "team join --url <COORDINATOR_URL> --invite-code <INVITE_CODE> --input -");
-  assert.equal(joinAction?.input, "displayName, tags, receivesAds as JSON on stdin");
+  assert.equal(joinAction?.input, "displayName required; tags optional; receiving defaults on");
   assert.equal(actionCatalog.find((action) => action.name === "profile.update")?.command, "team profile update --confirm --input -");
   assert.equal(actionCatalog.find((action) => action.name === "ads.send")?.command, "team ads send --confirm --input -");
 
@@ -137,11 +143,12 @@ test("team CLI is a complete agent-first control plane with a private local capa
   const joined = await commandWithStdin(
     ["team", "join", "--url", origin, "--invite-code", "iloveads", "--input", "-"],
     env,
-    JSON.stringify({ displayName: "Erik", tags: ["typescript", "postgres"], receivesAds: false }),
+    JSON.stringify({ displayName: "Erik" }),
   );
   assert.equal((joined.result as { member: { id: string } }).member.id, member.id);
-  assert.doesNotMatch(String(joined.result.next), /receiver setup/, "advertiser-only join must not recommend receiver activation");
-  assert.match(String(joined.result.next), /profile update --confirm --input -.*serialized changes through stdin/);
+  assert.equal((joined.result as { member: { receivesAds: boolean } }).member.receivesAds, true);
+  assert.deepEqual(requests.at(-1)?.body, { action: "join", displayName: "Erik", tags: [], receivesAds: true });
+  assert.match(String(joined.result.next), /receiver setup --cadence 1/, "default onboarding must immediately prepare receiver activation");
   assert.equal(JSON.stringify(joined), JSON.stringify(joined).replace(/member\.private\.capability/g, ""), "member token must not be printed");
   const stored = JSON.parse(await readFile(contextPath, "utf8")) as { memberToken: string; origin: string };
   assert.equal(stored.memberToken, "member.private.capability");
@@ -182,8 +189,10 @@ test("team CLI is a complete agent-first control plane with a private local capa
   );
   assert.equal(((await command(["team", "ads", "mine"], env)).result as { ads: unknown[] }).ads.length, 1);
 
-  const preview = await command(["team", "receiver", "setup", "--cadence", "15"], env);
+  await assert.rejects(command(["team", "receiver", "setup", "--cadence", "0"], env), /integer from 1 to 1440 minutes/);
+  const preview = await command(["team", "receiver", "setup", "--cadence", "1"], env);
   assert.equal(preview.result.status, "draft");
+  assert.equal(preview.result.cadenceMinutes, 1);
   assert.match(String(preview.result.activationDisclosure), /separate sponsored session and never runs advertiser actions/);
   assert.equal(preview.result.termsVersion, "receiver-terms/2026-08-15");
   assert.equal(preview.result.privacyVersion, "privacy/2026-08-15");
@@ -193,6 +202,8 @@ test("team CLI is a complete agent-first control plane with a private local capa
   });
   const receiver = await command(["team", "receiver", "setup", "--confirm"], env);
   assert.equal((receiver.result as { local: { installation: { status: string } } }).local.installation.status, "active");
+  assert.match(String((receiver.result as { local: { next: string } }).local.next), /heartbeat attached to this setup task.*every 1 minute.*verify.*persisted/i);
+  assert.match(String((receiver.result as { local: { next: string } }).local.next), /do not create a standalone cron task/i);
   assert.equal(((await command(["team", "profile", "show"], env)).result as { receivesAds: boolean }).receivesAds, true,
     "successful receiver activation must opt an advertiser-only remote profile into receiving");
   await command(["team", "receiver", "pause", "--confirm"], env);

@@ -173,7 +173,7 @@ test("an enrolled receiver device can publish consent, while unsigned profile wr
     .bind(JSON.stringify(credential.publicJwk), credential.keyThumbprint, NOW.toISOString()).run();
   const body = JSON.stringify({
     status: "active", publishedFields: { coarseLocation: "US Northeast", acceptedRewardTypes: ["credits"] },
-    cadenceMinutes: 30, termsVersion: "terms/v1", privacyVersion: "privacy/v1",
+    cadenceMinutes: 1, termsVersion: "terms/v1", privacyVersion: "privacy/v1",
     hostDisclosure: { host: "Codex", consumesTurn: true },
   });
   const target = "/api/v1/receiver/profile";
