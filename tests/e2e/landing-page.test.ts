@@ -37,6 +37,8 @@ test("the public launch is a minimal branded agent handoff", async () => {
   assert.doesNotMatch(experience, /Try the demo|Private team|Join the network/);
   assert.match(css, /\.brand-ad\s*\{[^}]*color:\s*var\(--brand-red\)/);
   assert.match(css, /\.brand-daddy\s*\{[^}]*color:\s*var\(--ink\)/);
+  assert.match(css, /\.launch-page\s*\{[^}]*background:\s*#000/);
+  assert.match(css, /\.launch-brand \.brand-daddy\s*\{[^}]*color:\s*#fff/);
   assert.match(css, /:focus-visible/);
   assert.match(css, /font-family: Impact/);
   assert.match(css, /@media \(max-width: 620px\)/);

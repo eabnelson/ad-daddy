@@ -25,7 +25,8 @@ a { color: inherit; }
   display: grid;
   grid-template-rows: auto 1fr;
   padding: clamp(28px, 5vw, 72px);
-  background: #f5f2e9;
+  background: #000;
+  color: #fff;
 }
 .launch-brand { width: min(1280px, 100%); margin: 0 auto; text-align: center; }
 .launch-brand h1 {
@@ -40,6 +41,7 @@ a { color: inherit; }
 }
 .brand-ad { color: var(--brand-red); }
 .brand-daddy { color: var(--ink); }
+.launch-brand .brand-daddy { color: #fff; }
 .launch-brand > p {
   margin: clamp(22px, 3vw, 38px) 0 0;
   font-size: clamp(22px, 3vw, 42px);
@@ -70,6 +72,7 @@ a { color: inherit; }
   align-items: stretch;
   border: 2px solid var(--ink);
   background: #fff;
+  color: var(--ink);
   box-shadow: 10px 10px 0 var(--brand-red);
 }
 .launch-prompt p {
