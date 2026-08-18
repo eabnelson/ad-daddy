@@ -2,6 +2,17 @@ export type ClipboardWriter = {
   writeText(text: string): Promise<void>;
 };
 
+export const COPY_CONFIRMATION_MS = 1600;
+
+export function scheduleCopyReset(
+  reset: () => void,
+  schedule: (callback: () => void, delay: number) => ReturnType<typeof setTimeout> = setTimeout,
+  cancel: (timer: ReturnType<typeof setTimeout>) => void = clearTimeout,
+) {
+  const timer = schedule(reset, COPY_CONFIRMATION_MS);
+  return () => cancel(timer);
+}
+
 export function createSetupPrompt(setupUrl: string) {
   const url = new URL(setupUrl);
 

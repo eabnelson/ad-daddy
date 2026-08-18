@@ -5,7 +5,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { CopyPromptIcon } from "../../app/copy-prompt-icon.ts";
-import { copySetupPrompt, createSetupPrompt } from "../../app/landing-prompt.ts";
+import {
+  COPY_CONFIRMATION_MS,
+  copySetupPrompt,
+  createSetupPrompt,
+  scheduleCopyReset,
+} from "../../app/landing-prompt.ts";
 
 test("the public launch is a minimal branded agent handoff", async () => {
   const [page, hostedPage, experience, promptSource, brand, brandImages, brandImageFont, fontLicense, css, hostedLayout, og, icon] = await Promise.all([
@@ -38,6 +43,7 @@ test("the public launch is a minimal branded agent handoff", async () => {
   assert.match(experience, /Copied to clipboard/);
   assert.match(experience, /Copy failed\. Prompt selected for manual copy/);
   assert.match(experience, /aria-label=\{copyLabel\}/);
+  assert.match(experience, /className="launch-copy-button"/);
   assert.match(experience, /role="status"/);
   assert.doesNotMatch(experience, /TELL|YOUR AGENT|Try the demo|Private team|Join the network/);
   assert.match(css, /\.brand-ad\s*\{[^}]*color:\s*var\(--brand-red\)/);
@@ -46,6 +52,8 @@ test("the public launch is a minimal branded agent handoff", async () => {
   assert.match(css, /\.launch-brand \.brand-daddy\s*\{[^}]*color:\s*#fff/);
   assert.match(css, /\.launch-quote\s*\{[^}]*color:\s*#fff/);
   assert.match(css, /\.launch-copy-button\s*\{[^}]*color:\s*#fff/);
+  assert.match(css, /\.launch-copy-button \[data-glyph\]\s*\{[^}]*opacity:\s*0/);
+  assert.match(css, /\[data-state="copied"\] \[data-glyph="copied"\][^{]*\{[^}]*opacity:\s*1/);
   assert.match(css, /min-width:\s*44px/);
   assert.match(css, /min-height:\s*44px/);
   assert.match(css, /:focus-visible/);
@@ -68,17 +76,45 @@ test("the public launch is a minimal branded agent handoff", async () => {
   await access("public/AD-DADDY.md");
 });
 
-test("the copy control renders distinct copy, success, and failure glyphs", () => {
+test("the copy control renders all glyph layers for the CSS crossfade", () => {
   const copy = renderToStaticMarkup(createElement(CopyPromptIcon, { state: "copy" }));
   const copied = renderToStaticMarkup(createElement(CopyPromptIcon, { state: "copied" }));
   const failed = renderToStaticMarkup(createElement(CopyPromptIcon, { state: "failed" }));
 
-  assert.match(copy, /<rect/);
-  assert.doesNotMatch(copy, /m5 12 4 4L19 6/);
+  assert.match(copy, /data-state="copy"/);
+  assert.match(copy, /data-glyph="copy"/);
+  assert.match(copy, /data-glyph="copied"/);
+  assert.match(copy, /data-glyph="failed"/);
+  assert.match(copied, /data-state="copied"/);
   assert.match(copied, /m5 12 4 4L19 6/);
-  assert.doesNotMatch(copied, /<rect/);
+  assert.match(failed, /data-state="failed"/);
   assert.match(failed, /<circle/);
   assert.match(failed, /m9 9 6 6m0-6-6 6/);
+});
+
+test("a successful copy schedules one reset back to the copy control", () => {
+  let scheduledDelay = 0;
+  let scheduledCallback = () => {};
+  let clearedTimer: unknown;
+  let reset = false;
+  const timer = { id: "copy-reset" } as unknown as ReturnType<typeof setTimeout>;
+
+  const cleanup = scheduleCopyReset(
+    () => { reset = true; },
+    (callback, delay) => {
+      scheduledCallback = callback;
+      scheduledDelay = delay;
+      return timer;
+    },
+    (value) => { clearedTimer = value; },
+  );
+
+  assert.equal(scheduledDelay, COPY_CONFIRMATION_MS);
+  assert.equal(reset, false);
+  scheduledCallback();
+  assert.equal(reset, true);
+  cleanup();
+  assert.equal(clearedTimer, timer);
 });
 
 test("the setup prompt preserves the exact handoff copy and an absolute URL", () => {

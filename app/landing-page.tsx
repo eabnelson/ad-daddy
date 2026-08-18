@@ -1,10 +1,10 @@
 "use client";
 
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { BrandWordmark } from "./brand";
 import { CopyPromptIcon, type CopyPromptIconState } from "./copy-prompt-icon";
-import { copySetupPrompt, createSetupPrompt } from "./landing-prompt";
+import { copySetupPrompt, createSetupPrompt, scheduleCopyReset } from "./landing-prompt";
 
 const subscribeToOrigin = () => () => {};
 const browserInstructionsUrl = () => `${window.location.origin}/ad-daddy.md`;
@@ -19,6 +19,11 @@ export function LandingPage({ initialSetupUrl }: { initialSetupUrl: string }) {
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const promptRef = useRef<HTMLSpanElement>(null);
   const prompt = createSetupPrompt(instructionsUrl);
+
+  useEffect(() => {
+    if (copyState !== "copied") return;
+    return scheduleCopyReset(() => setCopyState("idle"));
+  }, [copyState]);
 
   async function copyPrompt() {
     if (copyState === "copying") return;
@@ -41,6 +46,7 @@ export function LandingPage({ initialSetupUrl }: { initialSetupUrl: string }) {
     copied: "Copied to clipboard",
     failed: "Copy failed. Prompt selected for manual copy",
   }[copyState];
+  const copyStatus = copyState === "idle" ? "" : copyLabel;
   const copyIconState: CopyPromptIconState = copyState === "copied"
     ? "copied"
     : copyState === "failed"
@@ -75,7 +81,7 @@ export function LandingPage({ initialSetupUrl }: { initialSetupUrl: string }) {
             role="status"
             aria-live="polite"
           >
-            {copyLabel}
+            {copyStatus}
           </span>
         </div>
       </section>
