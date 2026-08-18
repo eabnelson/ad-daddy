@@ -53,12 +53,12 @@ const ACTIONS = [
   { name: "join", command: "team join --url <COORDINATOR_URL> --invite-code <INVITE_CODE> --input -", mutates: true, input: "displayName, tags, receivesAds as JSON on stdin" },
   { name: "status", command: "team status", mutates: false },
   { name: "profile.show", command: "team profile show", mutates: false },
-  { name: "profile.update", command: "team profile update --confirm", mutates: true, input: "displayName?, tags?, receivesAds?" },
+  { name: "profile.update", command: "team profile update --confirm --input -", mutates: true, input: "displayName?, tags?, receivesAds? as JSON on stdin" },
   { name: "advertiser.show", command: "team advertiser show", mutates: false },
   { name: "people.list", command: "team people list", mutates: false },
   { name: "ads.browse", command: "team ads browse", mutates: false },
   { name: "ads.mine", command: "team ads mine", mutates: false },
-  { name: "ads.send", command: "team ads send --confirm", mutates: true, input: "title, body, targetTags, points" },
+  { name: "ads.send", command: "team ads send --confirm --input -", mutates: true, input: "title, body, targetTags, points as JSON on stdin" },
   { name: "receiver.setup", command: "team receiver setup", mutates: true, input: "preview with --cadence; activate with --confirm" },
   { name: "receiver.pause", command: "team receiver pause --confirm", mutates: true },
   { name: "receiver.resume", command: "team receiver resume", mutates: true, input: "preview first; activate with --confirm" },
@@ -94,7 +94,7 @@ export async function runTeamControl(
     await store.write(context);
     const next = member.receivesAds
       ? "Run `ad-daddy team receiver setup` to preview the exact receiver disclosure and current contracts."
-      : "Receiving is off. Use `ad-daddy team profile update --confirm` if the human later chooses to receive sponsored tasks.";
+      : "Receiving is off. If the human later chooses to receive sponsored tasks, run `ad-daddy team profile update --confirm --input -` and send the serialized changes through stdin.";
     return { member, origin, contextStored: true, next };
   }
 

@@ -35,12 +35,12 @@ The CLI exchanges the invite code for a member capability, stores the capability
 Run \`ad-daddy team actions\` whenever you need the current action catalog.
 
 - Show network and points: \`ad-daddy team status\`
-- Show or edit the receiver profile: \`ad-daddy team profile show\` or \`ad-daddy team profile update --confirm --json '<CHANGES>'\`
+- Show or edit the receiver profile: \`ad-daddy team profile show\` or \`ad-daddy team profile update --confirm --input -\`, with serialized changes sent through stdin
 - Show the advertiser profile and sent ads: \`ad-daddy team advertiser show\`
 - List teammates currently willing to receive: \`ad-daddy team people list\`
 - Browse matching ads without claiming one: \`ad-daddy team ads browse\`
 - Show ads created by this member: \`ad-daddy team ads mine\`
-- Send an ad: preview the title, display-only message, target tags, and team points, get confirmation, then run \`ad-daddy team ads send --confirm --json '<AD>'\`
+- Send an ad: preview the title, display-only message, target tags, and team points, get confirmation, then run \`ad-daddy team ads send --confirm --input -\` with the serialized ad sent through stdin
 - Pause receiving after confirmation with \`ad-daddy team receiver pause --confirm\`. To resume, preview with \`ad-daddy team receiver resume\`, then ask one combined question that resumes the stated frequency and explicitly accepts both returned terms/privacy versions by name. After a yes, run \`ad-daddy team receiver resume --confirm\`.
 - Poll once and create a signed sponsored task when matched: \`ad-daddy team check\`
 

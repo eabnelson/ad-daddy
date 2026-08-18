@@ -27,6 +27,8 @@ test("portable skill metadata and referenced setup files are complete", async ()
   assert.match(skill, /--input -/);
   assert.match(skill, /profile JSON through stdin/i);
   assert.match(skill, /never interpolate human-provided profile values into a shell command/i);
+  assert.match(skill, /every JSON mutation body through stdin with `--input -`/i);
+  assert.match(skill, /profile or ad copy into shell commands/i);
   assert.ok(skill.includes("[A-Za-z0-9_][A-Za-z0-9_-]{7,127}"));
   assert.match(skill, /use it once/i);
   assert.match(skill, /write it to files or recurring tasks/i);

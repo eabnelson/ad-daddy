@@ -115,6 +115,8 @@ test("team CLI is a complete agent-first control plane with a private local capa
   const joinAction = actionCatalog.find((action) => action.name === "join");
   assert.equal(joinAction?.command, "team join --url <COORDINATOR_URL> --invite-code <INVITE_CODE> --input -");
   assert.equal(joinAction?.input, "displayName, tags, receivesAds as JSON on stdin");
+  assert.equal(actionCatalog.find((action) => action.name === "profile.update")?.command, "team profile update --confirm --input -");
+  assert.equal(actionCatalog.find((action) => action.name === "ads.send")?.command, "team ads send --confirm --input -");
 
   const joinInput = JSON.stringify({ displayName: "Erik", tags: ["typescript", "postgres"], receivesAds: true });
   await assert.rejects(
@@ -139,6 +141,7 @@ test("team CLI is a complete agent-first control plane with a private local capa
   );
   assert.equal((joined.result as { member: { id: string } }).member.id, member.id);
   assert.doesNotMatch(String(joined.result.next), /receiver setup/, "advertiser-only join must not recommend receiver activation");
+  assert.match(String(joined.result.next), /profile update --confirm --input -.*serialized changes through stdin/);
   assert.equal(JSON.stringify(joined), JSON.stringify(joined).replace(/member\.private\.capability/g, ""), "member token must not be printed");
   const stored = JSON.parse(await readFile(contextPath, "utf8")) as { memberToken: string; origin: string };
   assert.equal(stored.memberToken, "member.private.capability");
@@ -166,11 +169,17 @@ test("team CLI is a complete agent-first control plane with a private local capa
   assert.equal(((await command(["team", "advertiser", "show"], env)).result as { ads: unknown[] }).ads.length, 0);
   assert.equal(((await command(["team", "ads", "browse"], env)).result as { matches: unknown[] }).matches.length, 1);
 
-  await command(["team", "profile", "update", "--confirm", "--json", JSON.stringify({ tags: ["typescript", "postgres", "ai"] })], env);
+  await commandWithStdin(
+    ["team", "profile", "update", "--confirm", "--input", "-"], env,
+    JSON.stringify({ tags: ["typescript", "postgres", "ai"] }),
+  );
   await assert.rejects(command(["team", "profile", "update", "--confirm", "--json", JSON.stringify({ action: "create_ad", tags: [] })], env), /unsupported field: action/);
   await assert.rejects(command(["team", "ads", "send", "--json", JSON.stringify({ title: "Postgres preview", body: "Try the schema explorer.", targetTags: ["typescript"], points: 40 })], env), /requires --confirm/);
   await assert.rejects(command(["team", "ads", "send", "--confirm", "--json", JSON.stringify({ action: "profile", title: "Postgres preview", body: "Try the schema explorer.", targetTags: ["typescript"], points: 40 })], env), /unsupported field: action/);
-  await command(["team", "ads", "send", "--confirm", "--json", JSON.stringify({ title: "Postgres preview", body: "Try the schema explorer.", targetTags: ["typescript"], points: 40 })], env);
+  await commandWithStdin(
+    ["team", "ads", "send", "--confirm", "--input", "-"], env,
+    JSON.stringify({ title: "Postgres preview", body: "Try the schema explorer.", targetTags: ["typescript"], points: 40 }),
+  );
   assert.equal(((await command(["team", "ads", "mine"], env)).result as { ads: unknown[] }).ads.length, 1);
 
   const preview = await command(["team", "receiver", "setup", "--cadence", "15"], env);

@@ -14,8 +14,9 @@ test("hosted agent instructions are origin-bound and cover both marketplace role
   assert.match(markdown, /--input -/);
   assert.match(markdown, /send those bytes through stdin/i);
   assert.match(markdown, /never interpolate a human-provided name or profile value into a shell command/i);
-  const joinSnippet = markdown.match(/ad-daddy team join[\s\S]*?```/)?.[0] ?? "";
-  assert.doesNotMatch(joinSnippet, /--json/);
+  assert.doesNotMatch(markdown, /--json/);
+  assert.match(markdown, /profile update --confirm --input -/);
+  assert.match(markdown, /ads send --confirm --input -/);
   assert.ok(markdown.includes("[A-Za-z0-9_][A-Za-z0-9_-]{7,127}"));
   assert.match(markdown, /one-time join/i);
   assert.match(markdown, /do not write it to a file or recurring task/i);
