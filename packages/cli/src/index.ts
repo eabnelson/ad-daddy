@@ -9,6 +9,7 @@ import {
   CodexLocalDeliveryRuntime,
   JsonLocalDeliveryStateStore,
   environmentCodexHostAuthorization,
+  type CodexAppServerConnection,
   type GenericPlacementReceipt,
 } from "@ad-daddy/host-adapters";
 
@@ -21,6 +22,7 @@ import { MacOSDeviceKeyProvider, type AdDaddyEnvironment, type DeviceKeyProvider
 import { JsonLocalStore, type LocalInstallationConfig, type SetupRole } from "./local-store.js";
 import { fetchReceiverProfile, publishReceiverProfile } from "./receiver-profile.js";
 import { JsonSponsorshipPullStateStore, SponsorshipPullClient } from "./sponsorship-pull.js";
+import { runTeamControl, type TeamLocalIdentity } from "./team-control.js";
 
 export const CLI_VERSION = "0.1.0";
 const MAX_INPUT_BYTES = 131_072;
@@ -52,6 +54,7 @@ export function usage(): string {
     "placement  read, hide, block, or report one sponsored placement",
     "pause      stop checking before consent revocation",
     "uninstall  revoke the local installation",
+    "team       join and operate the private team proof through the agent",
   ].join("\n");
 }
 
@@ -64,6 +67,8 @@ export interface CliDependencies {
   homeDirectory?: string;
   executablePath?: string;
   deviceKeyProvider?: DeviceKeyProvider;
+  /** Test/embedded-host seam; the installed CLI uses the local Codex App Server. */
+  codexConnectionFactory?: () => Promise<CodexAppServerConnection>;
 }
 
 /** Runs one command and always emits a single JSON document. */
@@ -85,7 +90,39 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     const setup = new ReceiverSetupService(store);
     let result: unknown;
 
-    if (command === "setup") {
+    if (command === "team") {
+      const contextPath = flags.values.get("team-config") ?? env.AD_DADDY_TEAM_CONFIG_PATH ?? join(dependencies.homeDirectory ?? homedir(), ".ad-daddy", "team.json");
+      result = await runTeamControl(flags, {
+        fetch: dependencies.fetch,
+        env,
+        contextPath,
+        readInput: () => readJsonInput(flags),
+        receiver: {
+          setupPreview: async (context, cadenceMinutes) => {
+            const prepared = await setup.prepare(teamReceiverInput(context, cadenceMinutes));
+            return { ...prepared, receiverHost: teamReceiverHostCapability(env), next: "Show this exact disclosure and both contract versions before asking for activation acceptance." };
+          },
+          setupActivate: async (context, acceptance) => {
+            assertTeamReceiverHostCapability(env);
+            await requireTeamReceiverDraft(store, context.installationId, "setup");
+            const installation = await setup.activate({ installationId: context.installationId, ...acceptance });
+            return { installation, next: "Create a host-native recurring task that runs `ad-daddy team check` at the approved cadence." };
+          },
+          pause: async (context) => setup.pause(context.installationId),
+          resumePreview: async (context) => {
+            const current = await store.get(context.installationId);
+            const prepared = await setup.prepare(teamReceiverInput(context, current?.cadenceMinutes ?? 15));
+            return { ...prepared, receiverHost: teamReceiverHostCapability(env), next: "Show this exact disclosure and both contract versions before asking for fresh resume acceptance." };
+          },
+          resumeActivate: async (context, acceptance) => {
+            assertTeamReceiverHostCapability(env);
+            await requireTeamReceiverDraft(store, context.installationId, "resume");
+            return setup.activate({ installationId: context.installationId, ...acceptance });
+          },
+          check: async (context) => runTeamCheck(context, flags, dependencies, env),
+        },
+      });
+    } else if (command === "setup") {
       const input = await readJsonInput(flags) as SetupInput;
       assertInstallationId(input.installationId);
       if (input.role === "advertiser") {
@@ -110,56 +147,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
       else if (operation === "sync") result = await syncConfig(config, store, flags, dependencies, env);
       else throw new Error("profile requires show, publish, or sync");
     } else if (command === "check") {
-      let config = await oneInstallation(store, flags);
-      if (config.deviceCredential && (flags.values.get("api-url") ?? env.AD_DADDY_API_URL)) {
-        config = await syncConfig(config, store, flags, dependencies, env);
-      }
-      const delivery = config.status === "active"
-        ? await createLocalDeliveryRuntime(config, flags, dependencies, env)
-        : undefined;
-      if (config.deviceCredential) {
-        if (!delivery) throw new Error("Active local delivery capability is required before fetching sponsorship inventory");
-        const apiBaseUrl = flags.values.get("api-url") ?? env.AD_DADDY_API_URL;
-        if (!apiBaseUrl) throw new Error("check requires --api-url or AD_DADDY_API_URL");
-        const marketplacePublicKeyPem = flags.values.get("marketplace-public-key") ?? env.AD_DADDY_MARKETPLACE_PUBLIC_KEY_PEM;
-        if (!marketplacePublicKeyPem) throw new Error("check requires the pinned AD_DADDY_MARKETPLACE_PUBLIC_KEY_PEM");
-        const localRoot = flags.values.get("local-root") ?? env.AD_DADDY_LOCAL_ROOT ?? join(dependencies.homeDirectory ?? homedir(), ".ad-daddy");
-        const pull = new SponsorshipPullClient({
-          identity: sponsorshipIdentity(config),
-          environment: adDaddyEnvironment(env),
-          provider: dependencies.deviceKeyProvider ?? new MacOSDeviceKeyProvider({ platform: dependencies.platform }),
-          marketplacePublicKeyPem,
-          apiBaseUrl,
-          fetch: dependencies.fetch,
-          state: new JsonSponsorshipPullStateStore(flags.values.get("pull-state") ?? env.AD_DADDY_PULL_STATE_PATH ?? join(localRoot, "sponsorship-pull.json")),
-          delivery,
-          readCurrentIdentity: async () => {
-            const current = await store.get(config.installationId);
-            return current?.deviceCredential ? { ...sponsorshipIdentity(current), status: current.status } : undefined;
-          },
-          adapterVersion: `ad-daddy-cli/${CLI_VERSION}`,
-        });
-        result = await runManualCheck({ installationId: config.installationId, store, poll: (_publishedFields, now) => pull.check(now) });
-      } else {
-        const pollUrl = flags.values.get("poll-url") ?? env.AD_DADDY_POLL_URL;
-        if (!pollUrl) throw new Error("check requires an enrolled device or the explicit legacy poll URL");
-        const checked = await runManualCheck({
-          installationId: config.installationId,
-          store,
-          poll: async (publishedFields) => requestJson(pollUrl, {
-            installationId: config.installationId,
-            consentVersion: config.consentVersion,
-            publishedFields,
-          }, flags, dependencies, env),
-          delivery,
-        });
-        if (env.AD_DADDY_PRIVATE_TEAM_MODE === "1" && checked.status === "checked" && "delivery" in checked &&
-          (checked.delivery?.status === "native" || checked.delivery?.status === "fallback")) {
-          const deliveryId = teamPlacementId(checked.response);
-          await requestJson(pollUrl, { action: "ack", deliveryId }, flags, dependencies, env);
-        }
-        result = checked;
-      }
+      result = await executeCheck(store, flags, dependencies, env);
     } else if (command === "enroll") {
       const operation = flags.positionals[0];
       if (!operation || !["prepare", "complete"].includes(operation)) throw new Error("enroll requires prepare or complete");
@@ -260,6 +248,123 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     stderr(`${JSON.stringify({ ok: false, command: command ?? null, error: boundedMessage(error) })}\n`);
     return 1;
   }
+}
+
+function teamReceiverInput(context: TeamLocalIdentity, cadenceMinutes: number): SetupInput {
+  return {
+    installationId: context.installationId,
+    accountId: context.memberId,
+    role: "both",
+    profile: { values: {}, enabled: {} },
+    cadenceMinutes,
+    termsVersion: "receiver-terms/2026-08-15",
+    privacyVersion: "privacy/2026-08-15",
+    hostDisclosure: { host: "Codex", consumesTurn: true },
+  };
+}
+
+function teamReceiverHostCapability(env: NodeJS.ProcessEnv): { host: "Codex"; supported: boolean; reason: string } {
+  const supported = Boolean(env.CODEX_THREAD_ID);
+  return {
+    host: "Codex",
+    supported,
+    reason: supported
+      ? "This Codex task provides the active-task authorization required to prove a new sponsored task does not replace the current task."
+      : "Native receiver delivery is not supported in this host yet. Run receiver activation from a Codex task; advertiser and profile commands remain available here.",
+  };
+}
+
+function assertTeamReceiverHostCapability(env: NodeJS.ProcessEnv): void {
+  const capability = teamReceiverHostCapability(env);
+  if (!capability.supported) throw new Error(capability.reason);
+}
+
+async function requireTeamReceiverDraft(store: JsonLocalStore, installationId: string, operation: "setup" | "resume"): Promise<void> {
+  const config = await store.get(installationId);
+  if (config?.status !== "draft") {
+    throw new Error(`Receiver ${operation} requires a fresh preview first; run \`ad-daddy team receiver ${operation}\` without --confirm and show the returned disclosure and contract versions`);
+  }
+}
+
+async function runTeamCheck(
+  context: TeamLocalIdentity,
+  sourceFlags: ParsedFlags,
+  dependencies: CliDependencies,
+  env: NodeJS.ProcessEnv,
+): Promise<unknown> {
+  const endpoint = new URL("/api/team", context.origin).toString();
+  const flags: ParsedFlags = {
+    boolean: new Set(sourceFlags.boolean),
+    positionals: [],
+    values: new Map(sourceFlags.values),
+  };
+  flags.values.set("installation", context.installationId);
+  flags.values.set("poll-url", endpoint);
+  flags.values.set("token", context.memberToken);
+  flags.values.set("marketplace-public-key", context.publicKeyPem);
+  const store = new JsonLocalStore(flags.values.get("config") ?? env.AD_DADDY_CONFIG_PATH ?? join(dependencies.homeDirectory ?? homedir(), ".ad-daddy", "config.json"));
+  return executeCheck(store, flags, dependencies, {
+    ...env,
+    AD_DADDY_ENV: "development",
+    AD_DADDY_PRIVATE_TEAM_MODE: "1",
+  });
+}
+
+async function executeCheck(
+  store: JsonLocalStore,
+  flags: ParsedFlags,
+  dependencies: CliDependencies,
+  env: NodeJS.ProcessEnv,
+): Promise<unknown> {
+  let config = await oneInstallation(store, flags);
+  if (config.deviceCredential && (flags.values.get("api-url") ?? env.AD_DADDY_API_URL)) {
+    config = await syncConfig(config, store, flags, dependencies, env);
+  }
+  const delivery = config.status === "active"
+    ? await createLocalDeliveryRuntime(config, flags, dependencies, env)
+    : undefined;
+  if (config.deviceCredential) {
+    if (!delivery) throw new Error("Active local delivery capability is required before fetching sponsorship inventory");
+    const apiBaseUrl = flags.values.get("api-url") ?? env.AD_DADDY_API_URL;
+    if (!apiBaseUrl) throw new Error("check requires --api-url or AD_DADDY_API_URL");
+    const marketplacePublicKeyPem = flags.values.get("marketplace-public-key") ?? env.AD_DADDY_MARKETPLACE_PUBLIC_KEY_PEM;
+    if (!marketplacePublicKeyPem) throw new Error("check requires the pinned AD_DADDY_MARKETPLACE_PUBLIC_KEY_PEM");
+    const localRoot = flags.values.get("local-root") ?? env.AD_DADDY_LOCAL_ROOT ?? join(dependencies.homeDirectory ?? homedir(), ".ad-daddy");
+    const pull = new SponsorshipPullClient({
+      identity: sponsorshipIdentity(config),
+      environment: adDaddyEnvironment(env),
+      provider: dependencies.deviceKeyProvider ?? new MacOSDeviceKeyProvider({ platform: dependencies.platform }),
+      marketplacePublicKeyPem,
+      apiBaseUrl,
+      fetch: dependencies.fetch,
+      state: new JsonSponsorshipPullStateStore(flags.values.get("pull-state") ?? env.AD_DADDY_PULL_STATE_PATH ?? join(localRoot, "sponsorship-pull.json")),
+      delivery,
+      readCurrentIdentity: async () => {
+        const current = await store.get(config.installationId);
+        return current?.deviceCredential ? { ...sponsorshipIdentity(current), status: current.status } : undefined;
+      },
+      adapterVersion: `ad-daddy-cli/${CLI_VERSION}`,
+    });
+    return runManualCheck({ installationId: config.installationId, store, poll: (_publishedFields, now) => pull.check(now) });
+  }
+  const pollUrl = flags.values.get("poll-url") ?? env.AD_DADDY_POLL_URL;
+  if (!pollUrl) throw new Error("check requires an enrolled device or the explicit legacy poll URL");
+  const checked = await runManualCheck({
+    installationId: config.installationId,
+    store,
+    poll: async (publishedFields) => requestJson(pollUrl, {
+      installationId: config.installationId,
+      consentVersion: config.consentVersion,
+      publishedFields,
+    }, flags, dependencies, env),
+    delivery,
+  });
+  if (env.AD_DADDY_PRIVATE_TEAM_MODE === "1" && checked.status === "checked" && "delivery" in checked &&
+    (checked.delivery?.status === "native" || checked.delivery?.status === "fallback")) {
+    const deliveryId = teamPlacementId(checked.response);
+    await requestJson(pollUrl, { action: "ack", deliveryId }, flags, dependencies, env);
+  }
+  return checked;
 }
 
 interface ParsedFlags { values: Map<string, string>; boolean: Set<string>; positionals: string[] }
@@ -429,17 +534,20 @@ async function createLocalDeliveryRuntime(
   const statePath = flags.values.get("delivery-state") ?? env.AD_DADDY_DELIVERY_STATE_PATH ?? join(localRoot, "deliveries.json");
   const fallbackPath = flags.values.get("fallback-receipt") ?? env.AD_DADDY_FALLBACK_RECEIPT_PATH ?? join(localRoot, "fallback-receipt.json");
   await mkdir(isolatedCwd, { recursive: true, mode: 0o700 });
+  const authorizeHost = environmentCodexHostAuthorization({
+    receiverAccountId: config.accountId,
+    installationId: config.installationId,
+    isolatedCwd,
+    environment: env,
+    model: config.hostDisclosure.displayModel,
+    privateTeamPoc: env.AD_DADDY_PRIVATE_TEAM_MODE === "1",
+  });
   return new CodexLocalDeliveryRuntime({
     store: new JsonLocalDeliveryStateStore(statePath),
     marketplacePublicKeyPem,
-    authorizeHost: environmentCodexHostAuthorization({
-      receiverAccountId: config.accountId,
-      installationId: config.installationId,
-      isolatedCwd,
-      environment: env,
-      model: config.hostDisclosure.displayModel,
-      privateTeamPoc: env.AD_DADDY_PRIVATE_TEAM_MODE === "1",
-    }),
+    authorizeHost: dependencies.codexConnectionFactory
+      ? async (placement) => ({ ...(await authorizeHost(placement)), createConnection: dependencies.codexConnectionFactory! })
+      : authorizeHost,
     presentFallback: (receipt) => writeFallbackReceipt(fallbackPath, receipt),
   });
 }

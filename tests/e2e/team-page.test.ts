@@ -23,6 +23,8 @@ test("private team workspace makes the no-money sender and receiver loop self-se
   assert.match(source, /joinPendingRef\.current/);
   assert.match(source, /disabled=\{joining\}/);
   assert.match(source, /loads AD_DADDY_API_TOKEN from that local secret store/);
+  assert.match(source, /Creative stays inside its separate display-only sponsored task/);
+  assert.doesNotMatch(source, /ad\.(?:title|body|advertiserName)/);
   assert.doesNotMatch(source, /--token '\$\{session\.memberAccessToken\}'/);
   const worker = await readFile("worker/index.ts", "utf8");
   assert.match(worker, /D1TeamModeStore/);
@@ -68,8 +70,10 @@ test("the Vercel app exposes the minimal handoff, durable API, and agent-readabl
 test("team setup document delegates recurring polling and task creation to the receiver agent", async () => {
   const setup = await readFile("public/TEAM-MODE.md", "utf8");
   for (const phrase of [
-    "no real money", "AD_DADDY_INVITE_CODE", "AD_DADDY_TEAM_KEY", "AD_DADDY_PRIVATE_TEAM_MODE=1",
-    "ad-daddy check", "recurring", "AD DADDY: <sponsor message>", "do not create the task manually",
-    "same private team", "hosted test", "local D1",
+    "no-money", "AD_DADDY_INVITE_CODE", "AD_DADDY_TEAM_KEY", "team actions", "team join",
+    "team profile", "team advertiser", "team people", "team ads", "team check", "recurring",
+    "AD DADDY: <sponsor message>", "optional diagnostic workspace", "local coordinator",
   ]) assert.match(setup, new RegExp(phrase, "i"));
+  assert.doesNotMatch(setup, /paste.*member.*token/i);
+  assert.doesNotMatch(setup, /--invite-code/);
 });

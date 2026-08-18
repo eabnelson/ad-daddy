@@ -21,10 +21,10 @@ npm run build
 ### Vercel-hosted coordinator
 
 The fastest shared-team path is the Vercel app in `apps/vercel`. It hosts the
-onboarding page, origin-bound `/ad-daddy.md` agent instructions, profiles, ad
-inventory, and the API. A Vercel Marketplace Postgres integration persists the
-network; each teammate's local agent still polls and creates the sponsored task
-in their own supported host.
+origin-bound `/ad-daddy.md` agent instructions and the private team API. A
+Vercel Marketplace Postgres integration persists profiles and ad inventory;
+each teammate's local agent owns setup, profile changes, advertising, polling,
+and sponsored-task creation. The browser workspace is optional diagnostics.
 
 ```bash
 npm install
@@ -46,11 +46,13 @@ export AD_DADDY_TEAM_KEY="$(openssl rand -hex 24)"
 npm run dev -- --host 127.0.0.1
 ```
 
-Share a private HTTPS or SSH-forwarded-localhost `/team` URL and invite code. Keep `AD_DADDY_TEAM_KEY` private because it signs member tokens. Anyone who joins can
-send and receive ads; rewards are non-redeemable team points. The local D1
-database preserves the network across restarts. Give your agent the block from
-**Set up my agent** so it configures recurring polling and creates matching ads
-as separate sponsored Codex tasks. Full instructions: [`public/TEAM-MODE.md`](public/TEAM-MODE.md).
+Share the coordinator's `/ad-daddy.md` URL and invite code. Keep
+`AD_DADDY_TEAM_KEY` private because it signs member capabilities. Anyone who
+joins can send and receive ads; rewards are non-redeemable team points. The
+local D1 database preserves the network across restarts. The agent uses the
+`ad-daddy team` control plane to join, manage profiles, find people, browse or
+send ads, and configure recurring polling. Full instructions:
+[`public/TEAM-MODE.md`](public/TEAM-MODE.md).
 
 The private team proof never enables cash, settlement, deposits, or redemption.
 
@@ -106,6 +108,7 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 - `npm run dev`: start local development
 - `npm run build`: verify the vinext build output
+- `node packages/cli/dist/index.js team actions`: discover the private-team agent control plane
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 

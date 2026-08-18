@@ -49,6 +49,10 @@ export function createTeamModeHandler(runtime: TeamModeRuntime = {
       if (body.action === "profile") return json(200, { member: await runtime.service.updateProfile({
         memberKey, displayName: body.displayName, tags: body.tags, receivesAds: body.receivesAds,
       }) });
+      if (body.action === "profile_status") return json(200, { member: await runtime.service.profile(memberKey) });
+      if (body.action === "people") return json(200, { people: await runtime.service.people(memberKey) });
+      if (body.action === "advertiser_profile") return json(200, await runtime.service.advertiserProfile(memberKey));
+      if (body.action === "my_ads") return json(200, { ads: await runtime.service.memberAds(memberKey) });
       if (body.action === "create_ad") return json(201, { ad: await runtime.service.createAd({
         memberKey, title: body.title, body: body.body, targetTags: body.targetTags, points: body.points,
       }) });

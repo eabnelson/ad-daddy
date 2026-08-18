@@ -10,13 +10,24 @@ test("portable skill metadata and referenced setup files are complete", async ()
 
   assert.match(skill, /^---\nname: ad-daddy-skill\ndescription: .+\n---/);
   assert.match(skill, /receiver, advertiser, or both/i);
-  assert.match(skill, /credits and discounts pass through at 100%/i);
-  assert.match(skill, /one-time background opt-in/i);
-  assert.doesNotMatch(skill, /manual-only delivery/i);
+  assert.match(skill, /team actions/i);
+  assert.match(skill, /profile\.show|profile show/i);
+  assert.match(skill, /advertiser\.show|advertiser show/i);
+  assert.match(skill, /people\.list|people list/i);
+  assert.match(skill, /ads\.send|ads send/i);
+  assert.match(skill, /receiver\.setup|receiver setup/i);
+  assert.match(skill, /--accept-disclosure --accept-terms --accept-privacy/);
+  assert.match(skill, /supported only from a Codex task/i);
+  assert.match(skill, /browser/i);
+  assert.match(skill, /AD_DADDY_INVITE_CODE/);
+  assert.doesNotMatch(skill, /--invite-code/);
   assert.match(metadata, /\$ad-daddy-skill/);
 
   for (const reference of skill.matchAll(/\]\((references\/[^)]+)\)/g)) {
-    await access(new URL(reference[1], skillRoot));
+    const referenceUrl = new URL(reference[1], skillRoot);
+    await access(referenceUrl);
+    const referenceText = await readFile(referenceUrl, "utf8");
+    assert.doesNotMatch(referenceText, /--invite-code/);
   }
 });
 

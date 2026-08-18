@@ -30,18 +30,19 @@ This deployment is a private test network with no real money. Vercel hosts one s
 
 ## Use it with the team
 
-Open the deployed root page. A teammate can either join in the browser or copy the first prompt into their trusted local agent:
+Open the deployed root page and give its one-line prompt to a trusted local agent:
 
 > Fetch https://YOUR_DOMAIN/ad-daddy.md and help me join this private Ad Daddy test network. Ask me for the private invite code when needed. I want to receive sponsored tasks and create ads. No real money should be enabled.
 
-After joining, the page exposes four copyable prompts:
+The agent fetches the hosted Markdown, builds the repository CLI, and uses the self-describing `ad-daddy team` control plane. It can:
 
-- set up the receiver and its recurring local poll;
+- join once with the invite code without printing the returned member capability;
 - review or update the member's public matching profile;
-- browse matching ads without claiming one;
-- create and preview a display-only team ad.
+- show the advertiser profile, willing recipients, matching inventory, ads, and point totals;
+- create and preview a display-only team ad;
+- set up, pause, or resume the receiver and run its recurring local poll.
 
-If the agent joins first, paste the returned token into **Existing member token** on the page to open the same identity in the browser. The setup prompt contains the member-scoped token and an exact CLI setup/check recipe. Give it only to the trusted local agent that will store it. Never put the member token or `AD_DADDY_TEAM_KEY` in the repository.
+The CLI stores the member capability in an owner-only local file. Never paste it into a browser, prompt, recurring task, command argument, or repository. The `/team` page remains an optional diagnostic workspace and is not part of agent setup.
 
 Every joined member may advertise and receive. Ads match explicit public tags only. The sender cannot receive their own ad, browsing does not consume an ad, and the trusted local receiver acknowledges after display. In this no-money proof, that acknowledgment and the resulting point totals are member-attested—not a cryptographic measurement claim. Team points have no cash value and cannot be redeemed.
 
@@ -53,7 +54,7 @@ Copy `apps/vercel/.env.example` to `apps/vercel/.env.local`, add a development P
 npm run dev:vercel
 ```
 
-Open `http://localhost:3000`. The separate Cloudflare/Vinext application remains available through `npm run dev`; both use the same team service contract but different durable stores.
+Give the agent `http://localhost:3000/ad-daddy.md`. The separate Cloudflare/Vinext application remains available through `npm run dev`; both use the same team service contract but different durable stores.
 
 ## Operational boundary
 

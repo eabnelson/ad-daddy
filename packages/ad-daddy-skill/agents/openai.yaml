@@ -1,4 +1,7 @@
 interface:
   display_name: "Ad Daddy"
-  short_description: "Set up receiver or advertiser ad sessions safely"
-  default_prompt: "Use $ad-daddy-skill to set up Ad Daddy with explicit privacy, reward, and delivery controls."
+  short_description: "Run receiver and advertiser actions through your agent"
+  brand_color: "#D71920"
+  default_prompt: "Use $ad-daddy-skill to join Ad Daddy and manage my receiver or advertiser profile through the agent."
+policy:
+  allow_implicit_invocation: true

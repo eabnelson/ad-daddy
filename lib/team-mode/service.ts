@@ -32,6 +32,14 @@ export interface TeamAd {
   createdAt: string;
 }
 
+export interface TeamAdSummary {
+  adId: string;
+  targetTags: string[];
+  points: number;
+  rewardKind: "team_points";
+  createdAt: string;
+}
+
 export interface TeamDelivery {
   id: string;
   adId: string;
@@ -161,8 +169,8 @@ export class TeamModeService {
     const member = await this.requireMemberCapability(input.memberKey);
     const updated: TeamMember = {
       ...member,
-      displayName: boundedText(input.displayName, "displayName", 1, 60),
-      tags: tags(input.tags),
+      displayName: input.displayName === undefined ? member.displayName : boundedText(input.displayName, "displayName", 1, 60),
+      tags: input.tags === undefined ? member.tags : tags(input.tags),
       receivesAds: boolean(input.receivesAds, member.receivesAds),
       updatedAt: this.now().toISOString(),
     };
@@ -224,7 +232,7 @@ export class TeamModeService {
       rewardKind: "team_points" as const,
       member: publicMember(selected),
       members: members.map(networkMember),
-      ads,
+      ads: ads.map(adSummary),
       deliveries: deliveries.filter((delivery) => delivery.receiverMemberId === selectedId),
       score: {
         pointsReceived: displayed.filter((delivery) => delivery.receiverMemberId === selectedId).reduce((sum, delivery) => sum + delivery.points, 0),
@@ -233,13 +241,45 @@ export class TeamModeService {
     };
   }
 
+  async profile(memberKey: unknown) {
+    return publicMember(await this.requireMemberCapability(memberKey));
+  }
+
+  async people(memberKey: unknown) {
+    const selected = await this.requireMemberCapability(memberKey);
+    return (await this.#store.listMembers())
+      .filter((member) => member.id !== selected.id && member.receivesAds)
+      .map(networkMember);
+  }
+
+  async advertiserProfile(memberKey: unknown) {
+    const selected = await this.requireMemberCapability(memberKey);
+    const [members, ads] = await Promise.all([this.#store.listMembers(), this.#store.listAds()]);
+    return {
+      moneyEnabled: false as const,
+      rewardKind: "team_points" as const,
+      member: publicMember(selected),
+      ads: ads.filter((ad) => ad.advertiserMemberId === selected.id),
+      eligibleReceiverCount: members.filter((member) => member.id !== selected.id && member.receivesAds).length,
+    };
+  }
+
+  async memberAds(memberKey: unknown) {
+    const selected = await this.requireMemberCapability(memberKey);
+    return (await this.#store.listAds()).filter((ad) => ad.advertiserMemberId === selected.id);
+  }
+
   async browseAds(memberKey: unknown) {
     const selected = await this.requireMemberCapability(memberKey);
     const [ads, deliveries] = await Promise.all([this.#store.listAds(), this.#store.listDeliveries()]);
     const seen = new Set(deliveries
       .filter((delivery) => delivery.receiverMemberId === selected.id)
       .map((delivery) => delivery.adId));
-    return rankEligibleAds(ads, selected, seen);
+    return rankEligibleAds(ads, selected, seen).map(({ ad, matchedTags }) => ({
+      ...adSummary(ad),
+      matchedTags,
+      matchCount: matchedTags.length,
+    }));
   }
 
   private async requireMemberCapability(memberKey: unknown) {
@@ -338,5 +378,15 @@ function networkMember(member: TeamMember): PublicNetworkMember {
   return {
     id: member.id, displayName: member.displayName, tags: [...member.tags], receivesAds: member.receivesAds,
     createdAt: member.createdAt, updatedAt: member.updatedAt,
+  };
+}
+
+function adSummary(ad: TeamAd): TeamAdSummary {
+  return {
+    adId: ad.id,
+    targetTags: [...ad.targetTags],
+    points: ad.points,
+    rewardKind: ad.rewardKind,
+    createdAt: ad.createdAt,
   };
 }

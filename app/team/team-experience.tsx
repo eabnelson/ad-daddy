@@ -5,13 +5,13 @@ import styles from "./team.module.css";
 
 type Member = { id: string; installationId: string; displayName: string; tags: string[]; receivesAds: boolean; updatedAt?: string };
 type NetworkMember = Omit<Member, "installationId">;
-type TeamAd = { id: string; advertiserName: string; title: string; body: string; targetTags: string[]; points: number };
-type AdMatch = { ad: TeamAd; matchedTags: string[] };
+type TeamAdSummary = { adId: string; targetTags: string[]; points: number; rewardKind: "team_points"; createdAt: string };
+type AdMatch = TeamAdSummary & { matchedTags: string[]; matchCount: number };
 type Network = {
   moneyEnabled: false;
   member: Member;
   members: NetworkMember[];
-  ads: TeamAd[];
+  ads: TeamAdSummary[];
   score: { pointsReceived: number; pointsSent: number };
   publicKeyPem: string;
 };
@@ -321,14 +321,14 @@ export function TeamExperience() {
             <div className={styles.networkActions}><button onClick={() => void browseAds()}>Browse my matches</button><button onClick={() => void refresh()}>Refresh</button></div>
           </header>
           {matches && <div className={styles.matches}>
-            {matches.map(({ ad, matchedTags }) => <div key={ad.id}><span>Sponsored · {ad.advertiserName}</span><b>{ad.title}</b><p>{ad.body}</p><small>{ad.points} points · matched {matchedTags.join(", ") || "everyone"}</small></div>)}
+            {matches.map((match) => <div key={match.adId}><span>Sponsored match</span><b>{match.adId}</b><p>Creative stays inside its separate display-only sponsored task.</p><small>{match.points} points · matched {match.matchedTags.join(", ") || "everyone"}</small></div>)}
             {matches.length === 0 && <p>No unclaimed ads match your profile.</p>}
           </div>}
           <div className={styles.members}>
             {network?.members.map((member) => <div key={member.id}><b>{member.displayName}</b><span>{member.tags.join(" · ") || "Open to any ad"}</span><i>{member.receivesAds ? "Receiving" : "Paused"}</i></div>)}
           </div>
           <div className={styles.ads}>
-            {network?.ads.slice().reverse().map((ad) => <div key={ad.id}><span>Sponsored · {ad.advertiserName}</span><b>{ad.title}</b><small>{ad.points} team points · {ad.targetTags.join(", ") || "everyone"}</small></div>)}
+            {network?.ads.slice().reverse().map((ad) => <div key={ad.adId}><span>Sponsored inventory</span><b>{ad.adId}</b><small>{ad.points} team points · {ad.targetTags.join(", ") || "everyone"}</small></div>)}
             {network?.ads.length === 0 && <p>No ads yet. Send the first one.</p>}
           </div>
         </article>
