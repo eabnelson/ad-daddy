@@ -3,6 +3,7 @@
 import { useRef, useState, useSyncExternalStore } from "react";
 
 import { BrandWordmark } from "./brand";
+import { CopyPromptIcon, type CopyPromptIconState } from "./copy-prompt-icon";
 import { copySetupPrompt, createSetupPrompt } from "./landing-prompt";
 
 const subscribeToOrigin = () => () => {};
@@ -16,10 +17,11 @@ export function LandingPage({ initialSetupUrl }: { initialSetupUrl: string }) {
     () => initialSetupUrl,
   );
   const [copyState, setCopyState] = useState<CopyState>("idle");
-  const promptRef = useRef<HTMLParagraphElement>(null);
+  const promptRef = useRef<HTMLSpanElement>(null);
   const prompt = createSetupPrompt(instructionsUrl);
 
   async function copyPrompt() {
+    if (copyState === "copying") return;
     setCopyState("copying");
     const copied = await copySetupPrompt(prompt, () => navigator.clipboard);
     setCopyState(copied ? "copied" : "failed");
@@ -34,11 +36,16 @@ export function LandingPage({ initialSetupUrl }: { initialSetupUrl: string }) {
   }
 
   const copyLabel = {
-    idle: "COPY PROMPT",
-    copying: "COPYING",
-    copied: "COPIED",
-    failed: "COPY MANUALLY",
+    idle: "Copy setup prompt",
+    copying: "Copying setup prompt",
+    copied: "Copied to clipboard",
+    failed: "Copy failed. Prompt selected for manual copy",
   }[copyState];
+  const copyIconState: CopyPromptIconState = copyState === "copied"
+    ? "copied"
+    : copyState === "failed"
+      ? "failed"
+      : "copy";
 
   return (
     <main className="launch-page">
@@ -46,23 +53,30 @@ export function LandingPage({ initialSetupUrl }: { initialSetupUrl: string }) {
         <h1 aria-label="Ad Daddy">
           <BrandWordmark />
         </h1>
-        <p>Earn while you build</p>
+        <p>EARN WHILE YOU BUILD</p>
       </header>
 
-      <section className="launch-handoff" aria-labelledby="agent-title">
-        <h2 id="agent-title">
-          <span>TELL</span>{" "}YOUR AGENT
-        </h2>
-        <div className="launch-prompt">
-          <p ref={promptRef}>{prompt}</p>
+      <section className="launch-handoff" aria-label="Tell your agent">
+        <div className="launch-quote">
+          <p>
+            <span ref={promptRef}>{prompt}</span>
+          </p>
           <button
+            className="launch-copy-button"
             type="button"
             onClick={copyPrompt}
-            disabled={copyState === "copying"}
+            aria-disabled={copyState === "copying"}
+            aria-label={copyLabel}
+          >
+            <CopyPromptIcon state={copyIconState} />
+          </button>
+          <span
+            className={copyState === "failed" ? "launch-copy-hint" : "sr-only"}
+            role="status"
             aria-live="polite"
           >
             {copyLabel}
-          </button>
+          </span>
         </div>
       </section>
     </main>

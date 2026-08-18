@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
+import { CopyPromptIcon } from "../../app/copy-prompt-icon.ts";
 import { copySetupPrompt, createSetupPrompt } from "../../app/landing-prompt.ts";
 
 test("the public launch is a minimal branded agent handoff", async () => {
@@ -25,20 +28,26 @@ test("the public launch is a minimal branded agent handoff", async () => {
   assert.match(page, /NEXT_PUBLIC_AD_DADDY_URL/);
   assert.match(hostedPage, /initialSetupUrl=\{setupUrl\}/);
   assert.match(hostedPage, /https:\/\/ad-daddy-team\.vercel\.app\/ad-daddy\.md/);
-  for (const phrase of ["Earn while you build", "TELL", "YOUR AGENT"]) {
-    assert.match(experience, new RegExp(phrase));
-  }
+  assert.match(experience, /EARN WHILE YOU BUILD/);
   assert.match(promptSource, /Help me setup Ad Daddy/);
   assert.match(brand, />AD</);
   assert.match(brand, />DADDY</);
   assert.match(experience, /\/ad-daddy\.md/);
   assert.match(experience, /copySetupPrompt/);
-  assert.match(experience, /COPY MANUALLY/);
-  assert.doesNotMatch(experience, /Try the demo|Private team|Join the network/);
+  assert.match(experience, /Copy setup prompt/);
+  assert.match(experience, /Copied to clipboard/);
+  assert.match(experience, /Copy failed\. Prompt selected for manual copy/);
+  assert.match(experience, /aria-label=\{copyLabel\}/);
+  assert.match(experience, /role="status"/);
+  assert.doesNotMatch(experience, /TELL|YOUR AGENT|Try the demo|Private team|Join the network/);
   assert.match(css, /\.brand-ad\s*\{[^}]*color:\s*var\(--brand-red\)/);
   assert.match(css, /\.brand-daddy\s*\{[^}]*color:\s*var\(--ink\)/);
   assert.match(css, /\.launch-page\s*\{[^}]*background:\s*#000/);
   assert.match(css, /\.launch-brand \.brand-daddy\s*\{[^}]*color:\s*#fff/);
+  assert.match(css, /\.launch-quote\s*\{[^}]*color:\s*#fff/);
+  assert.match(css, /\.launch-copy-button\s*\{[^}]*color:\s*#fff/);
+  assert.match(css, /min-width:\s*44px/);
+  assert.match(css, /min-height:\s*44px/);
   assert.match(css, /:focus-visible/);
   assert.match(css, /font-family: Impact/);
   assert.match(css, /@media \(max-width: 620px\)/);
@@ -57,6 +66,19 @@ test("the public launch is a minimal branded agent handoff", async () => {
   assert.match(brandImageFont, /AD_DADDY_DISPLAY_FONT/);
   assert.match(fontLicense, /SIL OPEN FONT LICENSE Version 1\.1/);
   await access("public/AD-DADDY.md");
+});
+
+test("the copy control renders distinct copy, success, and failure glyphs", () => {
+  const copy = renderToStaticMarkup(createElement(CopyPromptIcon, { state: "copy" }));
+  const copied = renderToStaticMarkup(createElement(CopyPromptIcon, { state: "copied" }));
+  const failed = renderToStaticMarkup(createElement(CopyPromptIcon, { state: "failed" }));
+
+  assert.match(copy, /<rect/);
+  assert.doesNotMatch(copy, /m5 12 4 4L19 6/);
+  assert.match(copied, /m5 12 4 4L19 6/);
+  assert.doesNotMatch(copied, /<rect/);
+  assert.match(failed, /<circle/);
+  assert.match(failed, /m9 9 6 6m0-6-6 6/);
 });
 
 test("the setup prompt preserves the exact handoff copy and an absolute URL", () => {
